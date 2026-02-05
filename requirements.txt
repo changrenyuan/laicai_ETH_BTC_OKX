@@ -1,0 +1,3 @@
+python-okx>=0.3.5
+python-dotenv>=1.0.1
+loguru>=0.7.2
