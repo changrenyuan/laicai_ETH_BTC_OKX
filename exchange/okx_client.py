@@ -1,11 +1,20 @@
-from okx import MarketData, Account
+from okx import MarketData, Account, Trade, PublicData
 from loguru import logger
 
 
 class OKXClient:
     def __init__(self, api_key, secret_key, passphrase, flag="0"):
         self.market = MarketData.MarketAPI(flag=flag)
+        self.public = PublicData.PublicAPI(flag=flag)
+        # 1. 账户模块：用于查余额、设杠杆
         self.account = Account.AccountAPI(
+            api_key=api_key,
+            api_secret_key=secret_key,
+            passphrase=passphrase,
+            flag=flag
+        )
+        # 2. 交易模块：用于下单、撤单 (关键修改)
+        self.trade = Trade.TradeAPI(
             api_key=api_key,
             api_secret_key=secret_key,
             passphrase=passphrase,
@@ -25,3 +34,12 @@ class OKXClient:
         if result.get("code") != "0":
             raise RuntimeError(f"Balance error: {result}")
         return result["data"][0]
+
+    def get_instrument_info(self, inst_id: str):
+        """获取产品精度、最小下单量等信息"""
+        # 使用公开接口，无需私钥
+
+        result = self.public.get_instruments(instType="SWAP", instId=inst_id)
+        if result.get("code") == "0":
+            return result["data"][0]
+        return None
