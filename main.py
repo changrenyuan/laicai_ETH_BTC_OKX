@@ -8,6 +8,9 @@ from exchange.okx_client import OKXClient
 from data.market import MarketService
 from scanner.top_gainers import TopGainersScanner
 from strategy.short_martingale import ShortMartingaleStrategy
+from trade.dry_run import DryRunTrader
+from trade.order import RunTrader
+
 logger.remove()
 # 配置日志输出到文件
 logger.add("logs/trading_bot.log", rotation="500 MB", level=configpara.LOG_LEVEL)
@@ -38,7 +41,7 @@ def run_trading_cycle(client, scanner, strategy, balance_info):
             if symbol_data["position"] < configpara.ENTRY_POSITION_THRESHOLD:
                 continue
 
-            logger.success(f"发现高位目标: {inst_id} | 当前位置: {symbol_data['position'] * 100:.1f}%")
+            logger.success(f"发现高位目标: {inst_id}|当前价格{symbol_data['last']} | 当前位置: {symbol_data['position'] * 100:.1f}%")
 
             # 3. 获取合约规格
             inst_info = client.get_instrument_info(inst_id)
@@ -58,12 +61,12 @@ def run_trading_cycle(client, scanner, strategy, balance_info):
 
             # 5. 构建马丁格尔计划
             current_price = symbol_data["last"]
-            orders = strategy.build_orders(entry_price=current_price)
+            orders = strategy.build_orders(current_price)
 
             # 6. 风险审核
             audit = strategy.audit_orders(
                 orders=orders,
-                entry_price=current_price,
+                current_price=current_price,
                 ct_val=ct_val,
                 lot_sz=lot_sz,
                 avail_usdt=usdt_bal
@@ -75,7 +78,12 @@ def run_trading_cycle(client, scanner, strategy, balance_info):
 
             # 7. 执行层 (这里可以切换 DryRun 或 真实交易)
             logger.info(f"🚀 {inst_id} 计划执行：均价预估 {audit['avg_price']:.4f}, 止损位 {audit['sl_price']:.4f}")
-            # trader.execute(inst_id, audit['orders']) # 预留执行接口
+            trader = RunTrader(client)
+            # 【正式发单】
+            final_orders = trader.limit_orders(inst_id, orders)
+            if len(final_orders) > 0:
+                logger.success(f"🎯 成功挂出 {len(final_orders)} 笔订单。现在只需等待行情拉升触发补仓。")
+                # 这里你可以把这些 order_id 存到本地数据库或 JSON 文件，方便后续监控
 
         except Exception as e:
             logger.error(f"处理币种 {inst_id} 时发生错误: {e}")
@@ -131,7 +139,7 @@ def main():
         scanner = TopGainersScanner(client, min_volume_usdt=configpara.MIN_VOLUME)
 
         strategy = ShortMartingaleStrategy(
-            base_size=configpara.BASE_SIZE,
+            total_value_usdt=configpara.total_value_usdt,
             max_orders=configpara.MAX_ORDERS,
             step_pct=configpara.STEP_PCT,
             tp_pct=configpara.TP_PCT,
