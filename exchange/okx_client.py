@@ -43,3 +43,13 @@ class OKXClient:
         if result.get("code") == "0":
             return result["data"][0]
         return None
+
+    def place_limit_order(self, instId, side, px, sz):
+        return self.trade.place_order(
+            instId=instId,
+            tdMode="cross",
+            side=side,
+            ordType="limit",
+            px=str(px),
+            sz=str(sz)
+        )
