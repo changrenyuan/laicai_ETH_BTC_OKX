@@ -21,7 +21,10 @@ class OKXClient:
         # --- 新增：WebSocket 行情缓存 ---
         self.price_cache = {}
         self._ws_client = None
-
+        self._ws_pri = None
+        self.api_key=api_key
+        self.api_secret_key = secret_key
+        self.passphrase = passphrase
         self.market = MarketData.MarketAPI(flag=flag)
         self.public = PublicData.PublicAPI(flag=flag)
         # 1. 账户模块：用于查余额、设杠杆
@@ -153,11 +156,16 @@ class OKXClient:
         raise RuntimeError(f"OKX API 错误: {res}")
 
     # --- 新增：WebSocket 相关功能 ---
-    def init_websocket(self, inst_ids: list):
+    def init_websocket(self, inst_ids: list, callback=None):
         """
         改进理由：实现实时行情获取，降低 get_ticker 延迟。
         """
 
+        def _handle_private_internal(message):
+            channel = message.get("arg", {}).get("channel")
+            if channel in ["positions", "orders"]:
+                if callback:
+                    callback(message)  # 转发给 main.py 中定义的函数
         def _handle_ticker(message):
             if "data" in message:
                 for entry in message["data"]:
@@ -188,8 +196,15 @@ class OKXClient:
                         logger.warning(f"行情解析显示异常: {e}")
 ######################################################################
 
-        url = "wss://wspap.okx.com:443/ws/v5/public" if self.market.flag == "1" else "wss://ws.okx.com:443/ws/v5/public"
-        self._ws_client = SimpleWsClient(url, _handle_ticker)
+        # url = "wss://wspap.okx.com:443/ws/v5/public" if self.market.flag == "1" else "wss://ws.okx.com:443/ws/v5/public"
+        # url = "wss://wspap.okx.com:443/ws/v5/public" if self.market.flag == "1" else "wss://ws.okx.com:443/ws/v5/public"
+        base_url = "wspap.okx.com:443" if self.market.flag == "1" else "ws.okx.com:443"
+
+        # 如果要实现秒挂止盈，必须连接私有地址
+        # private_url = f"wss://{base_url}/ws/v5/private"
+        public_url = f"wss://{base_url}/ws/v5/public"
+
+        self._ws_client = SimpleWsClient(public_url, _handle_ticker)
         self._ws_client.start()
         # 等待连接建立的小缓冲
         time.sleep(1)
@@ -198,6 +213,27 @@ class OKXClient:
         args = [{"channel": "tickers", "instId": i} for i in inst_ids]
         self._ws_client.subscribe(args)
         logger.info(f"WebSocket 已启动并订阅: {inst_ids}")
+        # --- 通道 B: 私有数据 (Private) - 仅当传入 callback 时启动 ---
+        if callback:
+            private_url = f"wss://{base_url}/ws/v5/private"
+            self._ws_pri = SimpleWsClient(
+                private_url,
+                _handle_private_internal,
+                api_key=self.api_key,
+                secret_key=self.api_secret_key,
+                passphrase=self.passphrase
+            )
+            self._ws_pri.start()
+            time.sleep(0.5)
+            # 订阅仓位和订单频道
+            pri_args = [
+                {"channel": "positions", "instType": "SWAP"},
+                {"channel": "orders", "instType": "SWAP"}
+            ]
+            self._ws_pri.subscribe(pri_args)
+            logger.info("🎯 WebSocket 私有频道已启动，秒挂止盈功能就绪。")
+
+        logger.info(f"📡 WebSocket 行情频道已启动，监控中: {inst_ids}")
 
     # --- 原有增强函数整合 ---
     def cancel_order(self, inst_id: str, ord_id: str):

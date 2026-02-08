@@ -17,6 +17,7 @@ class ShortMartingaleStrategy:
             # --- 新增参数 ---
             tp_pct: float = 0.016,  # 目标止盈率 (1.2%)止盈目标 (1%)
             sl_pct: float = 0.03,  # 硬止损率 (3%) - 必须设置！
+
     ):
         self.total_value_usdt = total_value_usdt
         self.entry_offset_pct = entry_offset_pct

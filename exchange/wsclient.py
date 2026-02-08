@@ -5,9 +5,10 @@ import ssl
 import certifi
 import websockets
 from loguru import logger
+import hmac, base64, hashlib, time
 
 class SimpleWsClient:
-    def __init__(self, url, callback):
+    def __init__(self, url, callback, api_key=None, secret_key=None, passphrase=None):
         """
         :param url: WebSocket 地址
         :param callback: 收到数据后的回调函数 (同步函数)
@@ -18,11 +19,35 @@ class SimpleWsClient:
         self.loop = None
         self.ws = None
         self.is_running = False
-
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.passphrase = passphrase
         # SSL 配置
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.load_verify_locations(certifi.where())
 
+    def _get_signature(self, timestamp):
+        """生成 OKX WebSocket 登录签名"""
+        message = str(timestamp) + "GET" + "/users/self/verify"
+        mac = hmac.new(bytes(self.secret_key, encoding='utf8'),
+                       bytes(message, encoding='utf8'), digestmod=hashlib.sha256)
+        return base64.b64encode(mac.digest()).decode()
+
+    async def _login(self):
+        """执行鉴权登录"""
+        if not self.api_key: return
+        timestamp = int(time.time())
+        login_msg = {
+            "op": "login",
+            "args": [{
+                "apiKey": self.api_key,
+                "passphrase": self.passphrase,
+                "timestamp": timestamp,
+                "sign": self._get_signature(timestamp)
+            }]
+        }
+        await self.ws.send(json.dumps(login_msg))
+        logger.info(f"🔑 WS 发起登录鉴权: {self.url}")
     async def _run(self):
         """异步主循环，负责连接、订阅和监听"""
         while True:
@@ -36,7 +61,10 @@ class SimpleWsClient:
                     self.ws = ws
                     self.is_running = True
                     logger.success(f"OKX WebSocket 已连接: {self.url}")
-
+                    # 私有地址需要先登录
+                    if "/private" in self.url:
+                        await self._login()
+                        await asyncio.sleep(1)  # 等待登录响应
                     # 如果有存量订阅，自动重连订阅
                     if self._subscriptions:
                         sub_msg = {"op": "subscribe", "args": self._subscriptions}

@@ -8,6 +8,7 @@ class RunTrader:
         self.client = client
         self._inst_cache = {}  # instId -> instrument info
         self.last_pos_sz = 0  # 记录上次持仓张数，用于判断是否成交补仓
+        self.planned_orders = []  # 🔥 必须在这里初始化：存储计划补仓订单列表
     # =========================
     # 合约规格（按需拉取）
     # =========================
@@ -16,6 +17,39 @@ class RunTrader:
             info = self.client.get_instrument_info(inst_id)
             self._inst_cache[inst_id] = info
         return self._inst_cache[inst_id]
+
+    # =========================
+    # 获取算法订单列表（止盈止损单）
+    # =========================
+    def get_algo_orders(self, inst_id: str):
+        """
+        获取指定交易对的算法订单列表（止盈止损单等）
+
+        :param inst_id: 交易对ID
+        :return: 算法订单列表
+        """
+        try:
+            # OKX V5 标准方法名
+            result = self.client.trade.get_order_algo_list(
+                instType="SWAP",
+                instId=inst_id
+            )
+            return result.get("data", [])
+        except AttributeError:
+            # 如果方法名不同，尝试其他可能的命名
+            logger.warning("get_order_algo_list 方法不存在，尝试其他方法名")
+            try:
+                result = self.client.trade.get_algo_order_list(
+                    instType="SWAP",
+                    instId=inst_id
+                )
+                return result.get("data", [])
+            except AttributeError:
+                logger.error("无法获取算法订单列表，SDK 方法名不匹配")
+                return []
+        except Exception as e:
+            logger.error(f"获取算法订单列表失败: {e}")
+            return []
 
     # =========================
     # 币数量 → 合约张数
@@ -30,6 +64,18 @@ class RunTrader:
         contracts = math.floor(contracts / lotSz) * lotSz
 
         return int(contracts)
+
+    # =========================
+    # 设置计划补仓订单
+    # =========================
+    def set_planned_orders(self, orders: list):
+        """
+        设置计划补仓订单列表
+
+        :param orders: 计划订单列表，每个订单应包含 index, price, coin_size 等字段
+        """
+        self.planned_orders = orders
+        logger.debug(f"📝 已设置计划订单列表，共 {len(orders)} 个订单")
 
     # =========================
     # 干跑限价单（下 → 立刻撤）
@@ -131,72 +177,153 @@ class RunTrader:
     # =========================
     def monitor_and_sync(self, inst_id: str, strategy):
         """
-        修正参数报错后的监控逻辑
+        检查仓位变化并同步止盈止损。建议在外部循环中调用。
         """
         try:
-            # 1. 获取该币种下所有持仓 (不传 posSide)
+            # 获取当前持仓
             pos_res = self.client.account.get_positions(instId=inst_id)
-            # 筛选 short 仓位且张数大于 0 的
-            positions = [p for p in pos_res.get("data", [])
-                         if p.get("posSide") == "short" and int(p.get("pos", 0)) > 0]
+            positions = pos_res.get("data", [])
 
-            current_sz = 0
-            if positions:
-                pos = positions[0]
-                current_sz = int(pos["pos"])
-                avg_px = float(pos["avgPx"])
-
-                # 检查成交补仓
-                if current_sz != self.last_pos_sz:
-                    logger.info(f"🔔 {inst_id} 仓位变化: {self.last_pos_sz} -> {current_sz}")
-                    targets = strategy.get_exit_targets(avg_px)
-                    self.set_exit_orders(inst_id, current_sz, targets["tp_price"], targets["sl_price"])
-                    self.last_pos_sz = current_sz
-            else:
-                # 处理清仓逻辑
+            if not positions:
                 if self.last_pos_sz > 0:
-                    logger.success(f"🎊 {inst_id} 持仓已平仓")
+                    logger.success(f"🎊 {inst_id} 持仓已清空（止盈或止损成交）")
                     self.last_pos_sz = 0
-                    self.planned_orders = []
+                return
 
-            # 2. 只有在还有计划单且未清仓的情况下才对账
-            if self.planned_orders:
-                self.reconcile_orders(inst_id)
+            pos = positions[0]
+            current_sz = int(pos["pos"])
+            avg_px = float(pos["avgPx"])
+
+            # 只有当持仓张数增加（补仓成功）时，才重新计算
+            if current_sz != self.last_pos_sz:
+                logger.info(f"🔔 检测到仓位变动: {self.last_pos_sz} -> {current_sz} (成交补仓)")
+
+                # 从 strategy 对象获取基于最新均价的新止盈止损位
+                targets = strategy.get_exit_targets(avg_px)
+
+                # 执行更新
+                self.set_exit_orders(
+                    inst_id,
+                    current_sz,
+                    targets["tp_price"],
+                    targets["sl_price"]
+                )
+
+                # 更新本地记录的状态
+                self.last_pos_sz = current_sz
+            else:
+                # 🔥 新增：如果没有仓位变动，检查订单一致性
+                # 如果有计划订单，进行对账检查
+                if self.planned_orders:
+                    self.reconcile_orders(inst_id, self.planned_orders)
 
         except Exception as e:
-            logger.error(f"❌ 监控轮询发生异常: {e}")
-            # 这里不要 raise，让主循环继续，防止因为一次网络抖动导致整个机器人挂掉
+            logger.error(f"监控轮询发生异常: {e}")
+
     def reconcile_orders(self, inst_id: str, planned_orders: list):
         """
         对账逻辑：确认交易所挂单是否符合 strategy 的计划
         """
-        # 获取交易所真实挂单
-        remote_orders = self.client.trade.get_order_list(instId=inst_id).get("data", [])
-        # 提取真实挂单的价格集合（保留6位精度）
-        remote_prices = {round(float(o['px']), 6) for o in remote_orders}
+        try:
+            # 获取交易所真实挂单
+            remote_orders = self.client.trade.get_order_list(instId=inst_id).get("data", [])
+            # 提取真实挂单的价格集合（保留6位精度）
+            remote_prices = {round(float(o['px']), 6) for o in remote_orders}
 
-        # 提取本地计划中尚未成交的价格
-        # 注意：你需要记录哪些 index 已经成交了，只检查还没成交的
-        for plan in planned_orders:
-            plan_px = round(float(plan['price']), 6)
-            if plan_px not in remote_prices:
-                # 检查该价格是否已经变成了持仓（通过成交均价和张数推算）
-                # 如果没变成持仓，也没在挂单里，说明一致性被破坏了！
-                logger.error(f"🚨 一致性错误：计划挂单 {plan_px} 在交易所消失了！")
-                # 这里可以执行补单逻辑 trader.place_single_order(...)
+            # 提取本地计划中尚未成交的价格
+            # 注意：你需要记录哪些 index 已经成交了，只检查还没成交的
+            for plan in planned_orders:
+                plan_px = round(float(plan['price']), 6)
+                if plan_px not in remote_prices:
+                    # 检查该价格是否已经变成了持仓（通过成交均价和张数推算）
+                    # 如果没变成持仓，也没在挂单里，说明一致性被破坏了！
+                    logger.error(f"🚨 一致性错误：计划挂单 {plan_px} 在交易所消失了！")
+                    # 这里可以执行补单逻辑 trader.place_single_order(...)
 
-    def is_completely_exit(self, inst_id):
+        except Exception as e:
+            logger.error(f"对账 {inst_id} 时发生异常: {e}")
+
+    def is_completely_exit(self, inst_id: str) -> bool:
         """
-        判断一个币种是否已经彻底退出了这轮马丁格尔
+        判断是否已经完全平仓（止盈或止损离场）
+
+        :param inst_id: 交易对ID，如 'BTC-USDT-SWAP'
+        :return: True 表示已平仓，False 表示仍有持仓
         """
-        # 1. 检查仓位
-        pos = self.client.account.get_positions(instId=inst_id, posSide="short")
-        has_pos = len(pos.get("data", [])) > 0
+        try:
+            # 获取当前空头持仓
+            pos_res = self.client.account.get_positions(instId=inst_id)
+            positions = pos_res.get("data", [])
 
-        # 2. 检查挂单 (包括限价单和策略单)
-        orders = self.client.trade.get_order_list(instId=inst_id)
-        algos = self.client.trade.get_algo_order_list(instId=inst_id)
-        has_orders = len(orders.get("data", [])) > 0 or len(algos.get("data", [])) > 0
+            # 🔥 改进：更严格的筛选，只计算 short 且持仓张数 > 0 的仓位
+            has_pos = any(
+                p.get("posSide") == "short" and int(p.get("pos", 0)) > 0
+                for p in positions
+            )
 
-        # 如果既没持仓也没挂单，说明这轮结束了
-        return (not has_pos) and (not has_orders)
+            if not has_pos:
+                # 确保最后记录的持仓张数也归零
+                if self.last_pos_sz > 0:
+                    logger.info(f"✅ {inst_id} 确认已完全平仓")
+                    self.last_pos_sz = 0
+                return True
+
+            # 还有 short 持仓，未平仓
+            logger.debug(f"📊 {inst_id} 仍有持仓，继续监控")
+            return False
+
+        except Exception as e:
+            logger.error(f"检查 {inst_id} 持仓状态时出错: {e}")
+            # 出错时保守处理，返回 True，从监控名单移除，避免无限循环
+            return True
+
+    def handle_ws_position_update(self, data, strategy):
+        """
+        ⚡ WebSocket 回调处理器
+        当监听到持仓变动推送时，立即触发此函数
+        """
+        try:
+            if not data:
+                return
+
+            # 找到我们关心的 short 仓位数据
+            short_pos = None
+            for p in data:
+                if p.get("posSide") == "short":
+                    short_pos = p
+                    break
+
+            if not short_pos:
+                # 如果推送里没有 short 仓位，且本地记录有持仓，说明可能平仓了
+                if self.last_pos_sz > 0:
+                    logger.success("🎊 WebSocket 消息：持仓已清空")
+                    self.last_pos_sz = 0
+                return
+
+            current_sz = int(short_pos["pos"])
+            avg_px = float(short_pos["avgPx"])
+            inst_id = short_pos["instId"]
+
+            # 关键判断：张数增加了才重挂止盈止损（马丁格尔补仓）
+            if current_sz > self.last_pos_sz:
+                logger.info(f"🚀 WS 捕获成交！仓位由 {self.last_pos_sz} 增至 {current_sz}")
+
+                # 计算并设置新的止盈止损
+                targets = strategy.get_exit_targets(avg_px)
+                self.set_exit_orders(
+                    inst_id,
+                    current_sz,
+                    targets["tp_price"],
+                    targets["sl_price"]
+                )
+
+                # 更新本地状态
+                self.last_pos_sz = current_sz
+                logger.success(f"✅ 止盈止损同步完成 (均价: {avg_px})| 止盈: {targets['tp_price']}| 止损: {targets['sl_price']}")
+
+            elif current_sz < self.last_pos_sz:
+                # 减仓逻辑（如果你的策略涉及减仓）
+                self.last_pos_sz = current_sz
+
+        except Exception as e:
+            logger.error(f"处理 WS 持仓推送失败: {e}")
