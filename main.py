@@ -1,6 +1,8 @@
 import time
 import sys
 from loguru import logger
+
+import config.config
 from config.config import configpara
 
 # 导入自定义模块
@@ -19,10 +21,11 @@ logger.add(sys.stderr, level=configpara.console_LOG_LEVEL)
 
 
 
-def run_trading_cycle(client, scanner, strategy, balance_info):
+def run_trading_cycle(client, scanner, strategy, balance_info, active_symbols,leverage):
     """
     单次交易轮询逻辑
     """
+    logger.info(f"--- 市场扫描 (当前监控中: {list(active_symbols)}) ---")
     logger.info("--- 开始新一轮市场扫描 ---")
 
     # 1. 扫描涨幅榜 (成交额过滤已在 scanner 内实现)
@@ -35,7 +38,9 @@ def run_trading_cycle(client, scanner, strategy, balance_info):
     # 2. 遍历筛选潜在标的
     for symbol_data in top_list:
         inst_id = symbol_data["instId"]
-
+        # --- 【关键拦截】如果在名单里，说明已经下过单了，直接跳过 ---
+        if inst_id in active_symbols:
+            continue
         try:
             # 价格位置过滤 (从 config 读取参数，例如 0.9)
             if symbol_data["position"] < configpara.ENTRY_POSITION_THRESHOLD:
@@ -80,14 +85,17 @@ def run_trading_cycle(client, scanner, strategy, balance_info):
             logger.info(f"🚀 {inst_id} 计划执行：均价预估 {audit['avg_price']:.4f}, 止损位 {audit['sl_price']:.4f}")
             trader = RunTrader(client)
             # 【正式发单】
-            final_orders = trader.limit_orders(inst_id, orders)
+            final_orders = trader.limit_orders(inst_id, orders,leverage)
             if len(final_orders) > 0:
+                # --- 【关键记录】下单成功，加入全局名单 ---
+                active_symbols.add(inst_id)
                 logger.success(f"🎯 成功挂出 {len(final_orders)} 笔订单。现在只需等待行情拉升触发补仓。")
                 # 这里你可以把这些 order_id 存到本地数据库或 JSON 文件，方便后续监控
 
         except Exception as e:
             logger.error(f"处理币种 {inst_id} 时发生错误: {e}")
             continue  # 继续处理下一个币种
+
 
 
 def main():
@@ -141,6 +149,7 @@ def main():
         strategy = ShortMartingaleStrategy(
             total_value_usdt=configpara.total_value_usdt,
             max_orders=configpara.MAX_ORDERS,
+            entry_offset_pct=configpara.entry_offset_pct,
             step_pct=configpara.STEP_PCT,
             tp_pct=configpara.TP_PCT,
             sl_pct=configpara.SL_PCT,
@@ -150,18 +159,29 @@ def main():
         # 3. 初始资产检查
         balance = client.get_account_balance()
         logger.info(f"账户初始总资产: {balance['totalEq']} USD")
-
+        active_symbols = set()
+        trader = RunTrader(client)
         # 4. 主循环
         while True:
             try:
                 # 每一轮更新一次余额
                 current_balance = client.get_account_balance()
 
-                run_trading_cycle(client, scanner, strategy, current_balance)
+                run_trading_cycle(client, scanner, strategy, current_balance, active_symbols,leverage=config.config.configpara.LEVERAGE)
 
                 logger.info(f"轮询结束，休眠 {configpara.LOOP_INTERVAL} 秒...")
                 time.sleep(configpara.LOOP_INTERVAL)
-
+                # 每次循环都检查一下仓位是否有变化
+                # 3. 【核心监控逻辑】对已经下单的币种进行成交检查和止盈止损维护
+                # 使用 list() 是为了在遍历时可以安全地从 set 中 remove 元素
+                for inst_id in list(active_symbols):
+                # 检查这个币种是否补仓，并更新止盈止损
+                    trader.limit_orders.monitor_and_sync(inst_id, strategy)
+                    # 检查这个币种是否已经彻底清仓（止盈或止损离场了）
+                    # 这里假设你的 trader 类里有一个判断是否完全结束的方法
+                    if trader.is_completely_exit(inst_id):
+                        logger.warning(f"♻️ {inst_id} 交易已结束，从监控名单移除")
+                        active_symbols.remove(inst_id)
             except KeyboardInterrupt:
                 logger.warning("检测到手动停止指令，正在安全退出...")
                 break
