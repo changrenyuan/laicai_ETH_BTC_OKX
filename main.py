@@ -176,7 +176,7 @@ def main():
                 # 使用 list() 是为了在遍历时可以安全地从 set 中 remove 元素
                 for inst_id in list(active_symbols):
                 # 检查这个币种是否补仓，并更新止盈止损
-                    trader.limit_orders.monitor_and_sync(inst_id, strategy)
+                    trader.monitor_and_sync(inst_id, strategy)
                     # 检查这个币种是否已经彻底清仓（止盈或止损离场了）
                     # 这里假设你的 trader 类里有一个判断是否完全结束的方法
                     if trader.is_completely_exit(inst_id):
