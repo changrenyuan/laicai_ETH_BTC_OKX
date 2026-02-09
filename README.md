@@ -105,3 +105,33 @@ laicai_funding_engine/
 1. 核心策略高度一致：以资金费率套利为绝对核心，网格 / 低频轻交易为辅助，拒绝一切赌徒式策略；
 2. 执行原则一致：先落地核心套利系统并稳定运行 3-6 个月，聚焦工程化、自动化、低风险；
 3. 核心逻辑一致：放弃行情预测，靠规则和系统赚「确定性的收租钱」，而非「赌涨跌的投机钱」。
+
+## 实现落地
+```
+Phase 1: Infra
+- config/*
+- logs + notifier
+- okx_client (read-only)
+
+Phase 2: Safety
+- close_all.py
+- exchange_guard.py
+- margin_guard.py
+- circuit_breaker.py
+- （state_machine 空壳）
+
+Phase 3: Core
+- 完整 state_machine
+- context / events
+- bootstrap
+
+Phase 4: Trade
+- order_manager (原子)
+- cash_and_carry
+
+Phase 5: Auto
+- fund_guard
+- scheduler
+- pnl_tracker
+```
+
