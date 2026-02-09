@@ -154,3 +154,68 @@ class OKXClient:
     async def get_tickers(self, instType: str = "SWAP") -> Optional[List[Dict]]:
         """获取某类产品的所有行情"""
         return await self._request("GET", "/api/v5/market/tickers", params={"instType": instType})
+
+        # ... (保留原有 __init__, connect, _request 等方法) ...
+
+        # 🔥 新增：批量下单 (Batch Orders)
+        async def place_batch_orders(self, orders_data: list) -> list:
+            """
+            批量下单
+            :param orders_data: 订单列表，每个元素是 dict
+            Example:
+            [
+                {"instId": "BTC-USDT-SWAP", "tdMode": "cross", "side": "buy", "ordType": "limit", "px": "20000", "sz": "1"},
+                ...
+            ]
+            """
+            # OKX 限制每批最多 20 个订单
+            BATCH_LIMIT = 20
+            results = []
+
+            # 分批处理
+            for i in range(0, len(orders_data), BATCH_LIMIT):
+                batch = orders_data[i: i + BATCH_LIMIT]
+                self.logger.info(f"⚡ 批量提交订单: {len(batch)} 个")
+
+                res = await self._request("POST", "/api/v5/trade/batch-orders", data=batch)
+                if res:
+                    results.extend(res)
+                else:
+                    self.logger.error("批量下单部分或全部失败")
+
+            return results
+
+        # 🔥 新增：批量撤单 (Batch Cancel)
+        async def cancel_batch_orders(self, orders_data: list) -> list:
+            """
+            批量撤单
+            :param orders_data: [{"instId": "...", "ordId": "..."}, ...]
+            """
+            BATCH_LIMIT = 20
+            results = []
+
+            for i in range(0, len(orders_data), BATCH_LIMIT):
+                batch = orders_data[i: i + BATCH_LIMIT]
+                res = await self._request("POST", "/api/v5/trade/cancel-batch-orders", data=batch)
+                if res:
+                    results.extend(res)
+            return results
+
+            # ... (保留原有代码) ...
+
+            # 🔥 新增：获取 K 线数据 (Candlesticks)
+        async def get_candlesticks(self, instId: str, bar: str = "1H", limit: int = 100):
+            """
+            获取 K 线数据
+            :param bar: 时间粒度, e.g., 1m, 1H, 4H, 1D
+            :return: [[ts, o, h, l, c, vol, ...], ...]
+            """
+            params = {
+                "instId": instId,
+                "bar": bar,
+                "limit": str(limit)
+            }
+            # OKX API: GET /api/v5/market/candles
+            return await self._request("GET", "/api/v5/market/candles", params=params)
+
+        # ... (保留 batch_orders 等其他接口) ...

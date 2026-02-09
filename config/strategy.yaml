@@ -1,50 +1,67 @@
 # 🧱 策略配置文件
-# 资金费率阈值 / 开关
+# 核心控制台：在这里切换你的作战模式 (网格 vs 套利)
 
-# 策略开关
+# ==========================================
+# 🎮 策略总控
+# ==========================================
+# 选项:
+#   "futures_grid"   - 合约网格 (当前市场贴水/震荡时使用)
+#   "cash_and_carry" - 资金费率套利 (牛市/正溢价时使用)
+active_strategy: "futures_grid"
+
 strategy:
-  enabled: true  # 总开关
-  dry_run: false  # 是否为空跑模式（不真实下单）
+  enabled: true
+  dry_run: false
 
-# Cash & Carry 策略配置
+# ==========================================
+# 🕸️ 策略 A: 动态 AI 合约网格
+# ==========================================
+futures_grid:
+  symbol: "ETH-USDT-SWAP"
+  direction: "neutral"     # neutral(中性), long(做多), short(做空)
+  leverage: 3
+
+  # 🔥 AI 动态配置开关
+  is_dynamic: true         # 开启后，下方 fixed 参数失效，由算法自动计算
+
+  # 动态参数 (AI 依据)
+  lookback_period: 20      # 回看过去 20 根 K 线
+  k_line_interval: "1H"    # 使用 1 小时 K 线计算
+  band_width_multiplier: 2.0 # 布林带宽度 (标准差倍数)
+
+  # 静态保底参数 (如果 AI 计算失败，降级使用这些)
+  grid_type: "arithmetic"
+  lower_price: 2200
+  upper_price: 2800
+  grid_count: 30           # 网格数量
+
+  # 资金
+  investment: 500
+
+  # 风控
+  stop_loss_pct: 0.10      # 跌破网格下限 10% 止损
+
+# ==========================================
+# 💰 策略 B: 资金费率套利 (Cash & Carry) - 原有
+# ==========================================
 cash_and_carry:
-  # 开仓条件
+  # 开仓条件 (Spread > 0.1% 且 费率 > 0.01%)
   open_conditions:
-    spread_threshold: 0.0010    # 修正：改名为 spread (0.1% 价差开仓)
-    funding_rate_threshold: 0.0001  # 资金费率阈值 0.01%（正向）
-    min_funding_rate: 0.00005  # 最小资金费率 0.005%
-    max_funding_rate: 0.01  # 最大资金费率 1%（过高不追）
+    spread_threshold: 0.0010        # 价差阈值 0.1%
+    funding_rate_threshold: 0.0001  # 资金费率阈值 0.01%
+    min_funding_rate: 0.00005       # 最小费率保护
+    max_funding_rate: 0.05          # 最大费率限制
 
-  # 平仓条件
+  # 平仓条件 (Spread < 0% 或 费率转负)
   close_conditions:
-    spread_threshold: 0.0000    # 修正：改名为 spread (价差归零平仓)
-    funding_rate_threshold: -0.00005  # 资金费率负向阈值 -0.005%
-    min_profit: 0.005  # 最小盈利 0.5%
-    max_loss: 0.02  # 最大亏损 2%
-    max_holding_time: 720  # 最大持仓时间（小时，30天）
+    spread_threshold: 0.0000        # 价差归零平仓
+    funding_rate_threshold: -0.00005
+    min_profit: 0.005               # 最小盈利 0.5%
+    max_loss: 0.02                  # 最大止损 2%
+    max_holding_time: 720           # 最长持仓 30天
 
   # 仓位管理
   position_management:
-    initial_position_ratio: 0.5  # 初始仓位比例
-    max_position_ratio: 0.8  # 最大仓位比例
-    position_increment_ratio: 0.1  # 每次加仓比例
-    position_decrement_ratio: 0.2  # 每次减仓比例
-
-  # 资金费率监控
-  funding_monitor:
-    check_interval: 5  # 检查间隔（分钟）
-    funding_rate_window: 3  # 资金费率窗口（期数）
-    avg_funding_rate_threshold: 0.00008  # 平均资金费率阈值
-
-# 辅助策略（可选）
-auxiliary_strategies:
-  grid_trading:
-    enabled: false  # 默认关闭
-    adx_threshold: 25  # ADX 阈值，低于此值启动网格
-    grid_range_ratio: 0.05  # 网格范围 5%
-    grid_levels: 10  # 网格层数
-
-  trend_following:
-    enabled: false  # 默认关闭
-    stop_loss_ratio: 0.02  # 止损比例
-    take_profit_ratio: 0.05  # 止盈比例
+    initial_position_ratio: 0.5     # 首单仓位 50%
+    max_position_ratio: 0.8         # 最大仓位 80%
+    position_increment_ratio: 0.1   # 加仓步长
