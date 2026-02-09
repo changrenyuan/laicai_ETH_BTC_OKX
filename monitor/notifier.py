@@ -1,13 +1,14 @@
 """
-👀 通知器
-Telegram / 钉钉通知 (已修复：实现真实发送逻辑)
+👀 通知器 (修复版：支持代理)
+Telegram / 钉钉通知
 """
 
+import os
+import logging
+import aiohttp
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Dict
-import logging
-import aiohttp
 from enum import Enum
 
 class NotificationLevel(Enum):
@@ -39,6 +40,11 @@ class Notifier:
         self.telegram_chat_id = config.get("telegram_chat_id", "")
         self.dingtalk_webhook = config.get("dingtalk_webhook", "")
 
+        # 🔥 新增：自动获取系统代理
+        self.proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        if self.proxy and self.telegram_enabled:
+            self.logger.info(f"Notifier using proxy: {self.proxy}")
+
     async def send_alert(self, message: str, level: str = "info", source: str = "") -> bool:
         """发送告警"""
         if not self.enabled:
@@ -57,7 +63,8 @@ class Notifier:
                 self.notification_history.pop(0)
 
             success = False
-            # 并行发送（简单起见，这里按顺序发，确保逻辑清晰）
+
+            # 并行发送（这里串行即可）
             if self.telegram_enabled:
                 if await self._send_telegram(message, notification_level):
                     success = True
@@ -76,12 +83,12 @@ class Notifier:
             return False
 
     async def _send_telegram(self, message: str, level: NotificationLevel) -> bool:
-        """发送 Telegram 通知 (真实实现)"""
+        """发送 Telegram 通知 (带代理)"""
         if not self.telegram_bot_token or not self.telegram_chat_id:
             return False
 
         url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-        # 加上 Emoji 前缀
+
         emoji_map = {
             NotificationLevel.INFO: "ℹ️",
             NotificationLevel.WARNING: "⚠️",
@@ -97,8 +104,14 @@ class Notifier:
         }
 
         try:
+            # 🔥 修改点：增加 proxy 参数
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=10) as resp:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=10,
+                    proxy=self.proxy  # <--- 关键！
+                ) as resp:
                     if resp.status == 200:
                         self.logger.info("Telegram notification sent")
                         return True
@@ -111,7 +124,7 @@ class Notifier:
             return False
 
     async def _send_dingtalk(self, message: str, level: NotificationLevel) -> bool:
-        """发送钉钉通知 (真实实现)"""
+        """发送钉钉通知 (钉钉通常不需要代理，但加了也无妨)"""
         if not self.dingtalk_webhook:
             return False
 
@@ -124,7 +137,12 @@ class Notifier:
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.dingtalk_webhook, json=payload, timeout=10) as resp:
+                async with session.post(
+                    self.dingtalk_webhook,
+                    json=payload,
+                    timeout=10,
+                    # proxy=self.proxy # 钉钉国内直连通常更快，如果需要代理可取消注释
+                ) as resp:
                     if resp.status == 200:
                         self.logger.info("DingTalk notification sent")
                         return True
