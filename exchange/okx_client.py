@@ -1,6 +1,6 @@
 """
-🔌 OKX 客户端
-REST / WebSocket 封装
+🔌 OKX 客户端 (Phase 1: 只读模式)
+封装只读接口：查询余额、查询持仓、查询价格
 """
 
 import os
@@ -12,8 +12,8 @@ from datetime import datetime
 
 class OKXClient:
     """
-    OKX 交易所客户端
-    提供 REST API 和 WebSocket 接口
+    OKX 交易所客户端（只读模式）
+    仅提供查询功能，不包含交易功能
     """
 
     def __init__(self, config: dict):
@@ -35,11 +35,21 @@ class OKXClient:
 
         self.logger = logging.getLogger(__name__)
 
-    async def connect(self):
-        """建立连接"""
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
+    async def connect(self) -> bool:
+        """
+        建立连接
+
+        Returns:
+            bool: 是否连接成功
+        """
+        try:
+            if self.session is None:
+                self.session = aiohttp.ClientSession()
             self.logger.info("OKX client connected")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to connect: {e}")
+            return False
 
     async def disconnect(self):
         """断开连接"""
@@ -102,20 +112,38 @@ class OKXClient:
         params: Optional[Dict] = None,
         data: Optional[Dict] = None,
     ) -> Dict[str, str]:
-        """生成请求头"""
-        # TODO: 实现 OKX 签名逻辑
+        """
+        生成请求头（带签名）
+
+        注意：这是简化版本，生产环境需要完整的签名逻辑
+        """
+        timestamp = str(int(datetime.now().timestamp() * 1000))
+
+        # TODO: 实现完整的 OKX 签名逻辑
+        # 签名算法：base64(hmac_sha256(timestamp + method + requestPath + body, secret))
+        # 暂时使用空字符串，实际使用时需要实现完整签名
+
         return {
             "OK-ACCESS-KEY": self.api_key,
             "OK-ACCESS-SIGN": "",
-            "OK-ACCESS-TIMESTAMP": str(int(datetime.now().timestamp() * 1000)),
+            "OK-ACCESS-TIMESTAMP": timestamp,
             "OK-ACCESS-PASSPHRASE": self.api_passphrase,
             "Content-Type": "application/json",
         }
 
-    # ============ 账户相关 ============
+    # ============ Phase 1: 只读接口 ============
 
+    # 1. 查询余额
     async def get_balance(self, currency: str = "USDT") -> Optional[Dict]:
-        """获取余额"""
+        """
+        获取指定货币的余额
+
+        Args:
+            currency: 货币单位，如 "USDT"
+
+        Returns:
+            Dict: 余额信息
+        """
         result = await self._request(
             "GET",
             "/api/v5/account/balance",
@@ -123,8 +151,30 @@ class OKXClient:
         )
         return result
 
+    async def get_all_balances(self) -> Optional[Dict]:
+        """
+        获取所有货币的余额
+
+        Returns:
+            Dict: 所有余额信息
+        """
+        result = await self._request(
+            "GET",
+            "/api/v5/account/balance",
+        )
+        return result
+
+    # 2. 查询持仓
     async def get_positions(self, inst_type: str = "SWAP") -> Optional[Dict]:
-        """获取持仓"""
+        """
+        获取持仓信息
+
+        Args:
+            inst_type: 产品类型，默认 "SWAP"（永续合约）
+
+        Returns:
+            Dict: 持仓信息
+        """
         result = await self._request(
             "GET",
             "/api/v5/account/positions",
@@ -132,88 +182,17 @@ class OKXClient:
         )
         return result
 
-    async def get_account_config(self) -> Optional[Dict]:
-        """获取账户配置"""
-        result = await self._request(
-            "GET",
-            "/api/v5/account/config",
-        )
-        return result
-
-    # ============ 交易相关 ============
-
-    async def place_order(
-        self,
-        inst_id: str,
-        td_mode: str,
-        side: str,
-        ord_type: str,
-        sz: str,
-        px: Optional[str] = None,
-        reduce_only: bool = False,
-        post_only: bool = False,
-    ) -> Optional[Dict]:
+    # 3. 查询价格
+    async def get_ticker(self, inst_id: str) -> Optional[Dict]:
         """
-        下单
+        获取最新价格（行情）
 
         Args:
-            inst_id: 产品ID
-            td_mode: 交易模式
-            side: 买卖方向
-            ord_type: 订单类型
-            sz: 数量
-            px: 价格
-            reduce_only: 是否仅减仓
-            post_only: 是否仅挂单
+            inst_id: 产品ID，如 "BTC-USDT-SWAP"
 
         Returns:
-            Dict: 订单信息
+            Dict: 行情数据
         """
-        data = {
-            "instId": inst_id,
-            "tdMode": td_mode,
-            "side": side,
-            "ordType": ord_type,
-            "sz": sz,
-        }
-
-        if px:
-            data["px"] = px
-
-        if reduce_only:
-            data["reduceOnly"] = "true"
-
-        if post_only:
-            data["postOnly"] = "true"
-
-        result = await self._request("POST", "/api/v5/trade/order", data=data)
-        return result
-
-    async def cancel_order(self, order_id: str, inst_id: str) -> Optional[Dict]:
-        """撤单"""
-        result = await self._request(
-            "POST",
-            "/api/v5/trade/cancel-order",
-            data={
-                "ordId": order_id,
-                "instId": inst_id,
-            },
-        )
-        return result
-
-    async def cancel_all_orders(self, inst_type: str = "SWAP") -> Optional[Dict]:
-        """撤销所有订单"""
-        result = await self._request(
-            "POST",
-            "/api/v5/trade/cancel-batch-orders",
-            data={"instType": inst_type},
-        )
-        return result
-
-    # ============ 市场数据相关 ============
-
-    async def get_ticker(self, inst_id: str) -> Optional[Dict]:
-        """获取行情"""
         result = await self._request(
             "GET",
             "/api/v5/market/ticker",
@@ -221,65 +200,26 @@ class OKXClient:
         )
         return result
 
-    async def get_order_book(self, inst_id: str, sz: int = 5) -> Optional[Dict]:
-        """获取订单簿"""
+    # 4. 查询账户配置
+    async def get_account_config(self) -> Optional[Dict]:
+        """
+        获取账户配置信息
+
+        Returns:
+            Dict: 账户配置
+        """
         result = await self._request(
             "GET",
-            "/api/v5/market/books",
-            params={"instId": inst_id, "sz": sz},
+            "/api/v5/account/config",
         )
         return result
 
-    async def get_funding_rate(self, inst_id: str) -> Optional[Dict]:
-        """获取资金费率"""
-        result = await self._request(
-            "GET",
-            "/api/v5/public/funding-rate",
-            params={"instId": inst_id},
-        )
-        return result
-
-    async def get_candlesticks(
-        self,
-        inst_id: str,
-        bar: str = "1H",
-        limit: int = 100,
-    ) -> Optional[Dict]:
-        """获取K线数据"""
-        result = await self._request(
-            "GET",
-            "/api/v5/market/candlesticks",
-            params={
-                "instId": inst_id,
-                "bar": bar,
-                "limit": str(limit),
-            },
-        )
-        return result
-
-    # ============ 资金划转相关 ============
-
-    async def transfer(
-        self,
-        ccy: str,
-        amt: str,
-        from_: str,
-        to: str,
-        type_: str = "1",  # 0: 币币转合约, 1: 币币转统一账户
-    ) -> Optional[Dict]:
-        """资金划转"""
-        result = await self._request(
-            "POST",
-            "/api/v5/account/transfer",
-            data={
-                "ccy": ccy,
-                "amt": amt,
-                "from": from_,
-                "to": to,
-                "type": type_,
-            },
-        )
-        return result
+    # ============ Phase 2 以后的功能（暂不实现） ============
+    # 以下功能将在后续阶段实现：
+    # - place_order()  # 下单
+    # - cancel_order()  # 撤单
+    # - transfer()  # 资金划转
+    # 等...
 
     async def __aenter__(self):
         """异步上下文管理器入口"""

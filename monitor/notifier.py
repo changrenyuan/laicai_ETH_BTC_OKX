@@ -5,7 +5,7 @@ Telegram / 钉钉通知
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 import logging
 
 from enum import Enum

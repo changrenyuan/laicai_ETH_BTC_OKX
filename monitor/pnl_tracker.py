@@ -3,6 +3,7 @@
 非方向性 PnL 计算
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import logging

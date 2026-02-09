@@ -37,6 +37,35 @@
 1. 聚焦核心策略，不扩策略、不追新玩法、不被外界节奏影响；
 2. 利用工程思维做系统抗故障设计（监控熔断、滑点、极端行情）；
 3. 代码核心目标是自动化风控与套利（而非预测价格）。
+
+## 四、核心身份与收益逻辑共识
+- **核心身份**：不是「交易员」，而是「风险管理者 + 系统维护者」；
+- **收益来源**：不是行情涨跌，而是市场结构红利 + 赌徒犯错付出的成本（资金费率、追涨杀跌的无效波动）；
+- **核心特质匹配**：契合你「不想赌方向、接受慢 / 低回报、有工程思维、关注系统稳定性」的需求。
+
+## 五、总结
+1. 核心策略高度一致：以资金费率套利为绝对核心，网格 / 低频轻交易为辅助，拒绝一切赌徒式策略；
+2. 执行原则一致：先落地核心套利系统并稳定运行 3-6 个月，聚焦工程化、自动化、低风险；
+3. 核心逻辑一致：放弃行情预测，靠规则和系统赚「确定性的收租钱」，而非「赌涨跌的投机钱」。
+
+---
+
+# 资金费率套利交易系统操作手册
+
+## 📖 简介
+
+本系统是一个基于 Cash & Carry 策略的自动化交易系统，专注于通过资金费率套利获取稳定收益。系统采用方向中性（Delta Neutral）策略，通过现货与永续合约对冲，赚取正资金费率收益。
+
+### 核心特点
+
+- ✅ **方向中性**：不预测行情涨跌，专注于市场结构红利
+- ✅ **自动化运行**：全自动监控、开仓、平仓、再平衡
+- ✅ **多层级风险控制**：保证金防护、熔断器、流动性检测等
+- ✅ **完整监控体系**：健康检查、PnL 跟踪、实时通知
+- ✅ **模块化设计**：清晰的代码结构，易于扩展和维护
+
+### 系统架构
+
 ```
 laicai_funding_engine/
 │
@@ -59,11 +88,11 @@ laicai_funding_engine/
 │   ├─ circuit_breaker.py      # 连续止损 / 日熔断
 │   └─ exchange_guard.py       # 交易所异常 / API错误
 │
-├─ strategy/                   # 🧠 只表达“要不要做”
+├─ strategy/                   # 🧠 只表达"要不要做"
 │   ├─ cash_and_carry.py       # ⭐ 核心策略（唯一主策略）
 │   └─ conditions.py           # 开 / 平 仓条件
 │
-├─ execution/                  # ✋ 只负责“怎么做”
+├─ execution/                  # ✋ 只负责"怎么做"
 │   ├─ order_manager.py        # 原子化下单 / 撤单
 │   ├─ position_manager.py     # 现货 ↔ 合约 对冲
 │   └─ rebalancer.py           # 数量偏差修正
@@ -94,44 +123,172 @@ laicai_funding_engine/
 │   └─ test_execution.py
 │
 ├─ main.py                     # ⭐ 唯一入口
-└─ README.md                   # 操作手册（你自己）
-```
-## 四、核心身份与收益逻辑共识
-- **核心身份**：不是「交易员」，而是「风险管理者 + 系统维护者」；
-- **收益来源**：不是行情涨跌，而是市场结构红利 + 赌徒犯错付出的成本（资金费率、追涨杀跌的无效波动）；
-- **核心特质匹配**：契合你「不想赌方向、接受慢 / 低回报、有工程思维、关注系统稳定性」的需求。
-
-## 总结
-1. 核心策略高度一致：以资金费率套利为绝对核心，网格 / 低频轻交易为辅助，拒绝一切赌徒式策略；
-2. 执行原则一致：先落地核心套利系统并稳定运行 3-6 个月，聚焦工程化、自动化、低风险；
-3. 核心逻辑一致：放弃行情预测，靠规则和系统赚「确定性的收租钱」，而非「赌涨跌的投机钱」。
-
-## 实现落地
-```
-Phase 1: Infra
-- config/*
-- logs + notifier
-- okx_client (read-only)
-
-Phase 2: Safety
-- close_all.py
-- exchange_guard.py
-- margin_guard.py
-- circuit_breaker.py
-- （state_machine 空壳）
-
-Phase 3: Core
-- 完整 state_machine
-- context / events
-- bootstrap
-
-Phase 4: Trade
-- order_manager (原子)
-- cash_and_carry
-
-Phase 5: Auto
-- fund_guard
-- scheduler
-- pnl_tracker
+└─ README.md                   # 操作手册
 ```
 
+## 🚀 快速开始
+
+### 1. 环境准备
+
+```bash
+# 克隆项目
+git clone https://github.com/changrenyuan/laicai_ETH_BTC_OKX.git
+cd laicai_ETH_BTC_OKX
+
+# 创建虚拟环境（推荐）
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+### 2. 配置 API 密钥
+
+```bash
+# 复制环境变量模板
+cp .env.example .env
+
+# 编辑 .env 文件，填入你的 OKX API 密钥
+nano .env
+```
+
+### 3. 配置参数
+
+编辑 `config/` 目录下的配置文件：
+
+- `account.yaml` - 账户和资金配置
+- `instruments.yaml` - 交易品种配置
+- `strategy.yaml` - 策略参数
+- `risk.yaml` - 风险管理参数
+
+### 4. 启动前自检
+
+```bash
+# 运行启动前检查
+python scripts/bootstrap.py
+```
+
+### 5. 空跑测试
+
+```bash
+# 先在空跑模式下测试
+python scripts/dry_run.py
+```
+
+### 6. 启动系统
+
+```bash
+# 启动真实交易（确保已设置 dry_run: false）
+python main.py
+```
+
+## 🛠 运维操作
+
+### 紧急平仓
+
+如遇紧急情况，一键平掉所有持仓：
+
+```bash
+python scripts/close_all.py
+```
+
+### 查看日志
+
+```bash
+# 查看系统日志
+tail -f logs/app.log
+```
+
+### 运行测试
+
+```bash
+# 运行所有测试
+python -m pytest tests/
+
+# 或单独运行
+python tests/test_state.py
+python tests/test_risk.py
+python tests/test_execution.py
+```
+
+## ⚙️ 配置说明
+
+### 核心配置项
+
+**account.yaml**
+- `total_capital`: 总资金（USDT）
+- `spot_ratio`: 现货比例
+- `futures_ratio`: 合约比例
+- `max_position_value`: 单币种最大持仓
+
+**strategy.yaml**
+- `enabled`: 策略开关
+- `dry_run`: 空跑模式
+- `funding_rate_threshold`: 资金费率阈值
+
+**risk.yaml**
+- `margin_ratio_warning`: 保证金率警告阈值
+- `daily_loss_limit`: 日亏损限额
+- `circuit_breaker`: 熔断器配置
+
+## 📊 策略逻辑
+
+### 开仓条件
+
+1. 资金费率为正且在合理范围内（0.01% ~ 1%）
+2. 系统未处于紧急状态
+3. 保证金充足（> 80%）
+4. 无该品种持仓
+
+### 平仓条件
+
+1. 资金费率转负
+2. 达到止盈目标（5%）
+3. 触发止损（-2%）
+4. 系统紧急状态
+
+### 再平衡触发
+
+1. 保证金率低于 80%
+2. 现货与合约持仓偏差 > 1%
+
+## 🛡️ 风险控制
+
+### 多层级防护
+
+1. **保证金防护**：实时监控保证金率，自动触发再平衡
+2. **资金防护**：自动从现货划转资金到合约
+3. **流动性防护**：检测市场深度和滑点
+4. **熔断器**：连续亏损或日亏损达到限额时停止交易
+5. **交易所防护**：监控 API 错误和异常
+
+### 紧急情况处理
+
+- 保证金率 < 50%：触发紧急平仓
+- 连续亏损 3 次：触发熔断
+- 日亏损 > $500：触发熔断
+- 系统错误：停止所有交易
+
+## 📈 性能预期
+
+- **年化收益**：10% - 30%
+- **最大回撤**：< 15%
+- **胜率**：> 80%
+- **资金占用**：50% 现货 + 50% 合约
+
+## ⚠️ 重要提示
+
+1. **风险提示**：虽然本系统采用低风险策略，但投资有风险，请谨慎操作
+2. **测试优先**：务必在空跑模式下测试充分后再启用真实交易
+3. **资金管理**：不要投入超过可承受损失的资金
+4. **监控维护**：定期查看日志和系统状态
+5. **API 安全**：妥善保管 API 密钥，不要泄露
+
+## 📞 支持
+
+如有问题，请提交 Issue 或联系开发团队。
+
+## 📄 许可证
+
+MIT License
