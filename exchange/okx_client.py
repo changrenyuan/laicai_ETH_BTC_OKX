@@ -9,7 +9,7 @@ import hmac
 import base64
 import json
 import urllib.parse
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from datetime import datetime, timezone
 
 class OKXClient:
@@ -149,3 +149,8 @@ class OKXClient:
 
     async def get_funding_rate(self, inst_id: str):
         return await self._request("GET", "/api/v5/public/funding-rate", params={"instId": inst_id})
+
+        # 🔥 新增：获取所有行情 (用于扫描)
+    async def get_tickers(self, instType: str = "SWAP") -> Optional[List[Dict]]:
+        """获取某类产品的所有行情"""
+        return await self._request("GET", "/api/v5/market/tickers", params={"instType": instType})
