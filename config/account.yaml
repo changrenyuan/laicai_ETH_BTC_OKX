@@ -3,7 +3,7 @@
 
 # 交易所子账户配置
 sub_account:
-  name: "funding_arb"  # 子账户名称
+  name: "春日朝花"  # 子账户名称
   api_key: "${OKX_API_KEY}"  # 从环境变量读取
   api_secret: "${OKX_API_SECRET}"  # 从环境变量读取
   api_passphrase: "${OKX_API_PASSPHRASE}"  # 从环境变量读取
@@ -11,14 +11,14 @@ sub_account:
 
 # 资金分配配置
 capital_allocation:
-  total_capital: 100000  # 总资金（USDT）
+  total_capital: 1000  # 总资金（USDT）
   spot_ratio: 0.5  # 现货比例 50%
   futures_ratio: 0.5  # 合约比例 50%
   reserve_ratio: 0.1  # 预留资金比例 10%（用于追加保证金）
 
 # 风险限额
 risk_limits:
-  max_position_value: 50000  # 单币种最大持仓价值（USDT）
+  max_position_value: 50  # 单币种最大持仓价值（USDT）
   max_leverage: 3.0  # 最大杠杆倍数
   max_daily_loss: 1000  # 单日最大亏损（USDT）
   max_drawdown: 0.15  # 最大回撤 15%
