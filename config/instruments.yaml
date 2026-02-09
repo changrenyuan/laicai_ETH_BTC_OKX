@@ -8,10 +8,10 @@ instruments:
     quote_currency: "USDT"
     spot_symbol: "BTC-USDT"
     futures_symbol: "BTC-USDT-SWAP"
-    min_position: 0.001  # 最小持仓（BTC）
+    min_position: 0.0001  # 最小持仓（BTC）
     max_position: 2.0  # 最大持仓（BTC）
     tick_size: 0.01  # 价格精度
-    lot_size: 0.001  # 数量精度
+    lot_size: 0.0001  # 数量精度
     enabled: true  # 是否启用
 
   - symbol: "ETH-USDT"
@@ -19,10 +19,10 @@ instruments:
     quote_currency: "USDT"
     spot_symbol: "ETH-USDT"
     futures_symbol: "ETH-USDT-SWAP"
-    min_position: 0.01  # 最小持仓（ETH）
+    min_position: 0.001  # 最小持仓（ETH）
     max_position: 20.0  # 最大持仓（ETH）
     tick_size: 0.01  # 价格精度
-    lot_size: 0.01  # 数量精度
+    lot_size: 0.001  # 数量精度
     enabled: true  # 是否启用
 
 # 订单类型配置

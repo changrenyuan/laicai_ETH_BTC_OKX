@@ -4,9 +4,9 @@
 # 保证金防护
 margin_guard:
   enabled: true
-  margin_ratio_warning: 0.80  # 保证金率警告阈值 80%
-  margin_ratio_critical: 0.60  # 保证金率危险阈值 60%
-  margin_ratio_stop: 0.50  # 保证金率熔断阈值 50%
+  margin_ratio_warning: 3  # 保证金率警告阈值 80%
+  margin_ratio_critical: 1.5  # 保证金率危险阈值 60%
+  margin_ratio_stop: 1.2  # 保证金率熔断阈值 50%
   auto_add_margin: true  # 自动追加保证金
   auto_reduce_position: true  # 自动减仓
 
@@ -14,14 +14,14 @@ margin_guard:
 fund_guard:
   enabled: true
   check_interval: 60  # 检查间隔（分钟）
-  transfer_threshold: 1000  # 划转阈值（USDT）
-  max_transfer_per_day: 10000  # 每日最大划转（USDT）
+  transfer_threshold: 100  # 划转阈值（USDT）
+  max_transfer_per_day: 100  # 每日最大划转（USDT）
 
 # 流动性/深度防护
 liquidity_guard:
   enabled: true
   min_depth_threshold: 10000  # 最小深度（USDT）
-  max_slippage_ratio: 0.001  # 最大滑点 0.1%
+  max_slippage_ratio: 0.002  # 最大滑点 0.1%
   volume_check_window: 5  # 成交量检查窗口（分钟）
   min_volume_ratio: 0.1  # 最小成交量比例
 
@@ -29,8 +29,8 @@ liquidity_guard:
 circuit_breaker:
   enabled: true
   max_consecutive_losses: 3  # 最大连续亏损次数
-  consecutive_loss_threshold: 100  # 连续亏损阈值（USDT）
-  daily_loss_limit: 500  # 日亏损限额（USDT）
+  consecutive_loss_threshold: 30  # 连续亏损阈值（USDT）
+  daily_loss_limit: 20  # 日亏损限额（USDT）
   daily_profit_limit: 2000  # 日盈利限额（USDT）（防止过度贪婪）
   cooldown_period: 3600  # 冷却时间（秒）
 

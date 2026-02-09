@@ -10,12 +10,14 @@ strategy:
 cash_and_carry:
   # 开仓条件
   open_conditions:
+    spread_threshold: 0.0010    # 修正：改名为 spread (0.1% 价差开仓)
     funding_rate_threshold: 0.0001  # 资金费率阈值 0.01%（正向）
     min_funding_rate: 0.00005  # 最小资金费率 0.005%
     max_funding_rate: 0.01  # 最大资金费率 1%（过高不追）
 
   # 平仓条件
   close_conditions:
+    spread_threshold: 0.0000    # 修正：改名为 spread (价差归零平仓)
     funding_rate_threshold: -0.00005  # 资金费率负向阈值 -0.005%
     min_profit: 0.005  # 最小盈利 0.5%
     max_loss: 0.02  # 最大亏损 2%

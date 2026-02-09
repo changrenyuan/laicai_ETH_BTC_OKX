@@ -13,10 +13,10 @@ class StrategyConditions:
         close_cond = strat_cfg.get("close_conditions", {})
 
         # 核心阈值
-        self.open_spread = float(open_cond.get("funding_rate_threshold", 0.0001)) # 这里其实应该叫 spread_threshold, 先复用你的字段
+        self.open_spread = float(open_cond.get("spread_threshold", 0.0001)) # 这里其实应该叫 spread_threshold, 先复用你的字段
         self.min_funding_rate = float(open_cond.get("min_funding_rate", 0.0001))
 
-        self.close_spread = float(close_cond.get("funding_rate_threshold", 0.0))
+        self.close_spread = float(close_cond.get("spread_threshold", 0.0))
 
     def should_open(self, spot_price: float, swap_price: float, funding_rate: float) -> bool:
         """
