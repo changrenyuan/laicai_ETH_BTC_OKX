@@ -284,7 +284,34 @@ python tests/test_execution.py
 3. **资金管理**：不要投入超过可承受损失的资金
 4. **监控维护**：定期查看日志和系统状态
 5. **API 安全**：妥善保管 API 密钥，不要泄露
+## 进展
+```
+Phase 1: Infra
+- config/*
+- logs + notifier
+- okx_client (read-only)
 
+Phase 2: Safety
+- close_all.py
+- exchange_guard.py
+- margin_guard.py
+- circuit_breaker.py
+- （state_machine 空壳）
+
+Phase 3: Core
+- 完整 state_machine
+- context / events
+- bootstrap
+
+Phase 4: Trade
+- order_manager (原子)
+- cash_and_carry
+
+Phase 5: Auto
+- fund_guard
+- scheduler
+- pnl_tracker
+```
 ## 📞 支持
 
 如有问题，请提交 Issue 或联系开发团队。
