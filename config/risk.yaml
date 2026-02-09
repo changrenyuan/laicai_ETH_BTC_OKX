@@ -1,0 +1,61 @@
+# 🧱 风险管理配置文件
+# 熔断 / 保证金 / 深度 / 滑点
+
+# 保证金防护
+margin_guard:
+  enabled: true
+  margin_ratio_warning: 0.80  # 保证金率警告阈值 80%
+  margin_ratio_critical: 0.60  # 保证金率危险阈值 60%
+  margin_ratio_stop: 0.50  # 保证金率熔断阈值 50%
+  auto_add_margin: true  # 自动追加保证金
+  auto_reduce_position: true  # 自动减仓
+
+# 资金再平衡
+fund_guard:
+  enabled: true
+  check_interval: 60  # 检查间隔（分钟）
+  transfer_threshold: 1000  # 划转阈值（USDT）
+  max_transfer_per_day: 10000  # 每日最大划转（USDT）
+
+# 流动性/深度防护
+liquidity_guard:
+  enabled: true
+  min_depth_threshold: 10000  # 最小深度（USDT）
+  max_slippage_ratio: 0.001  # 最大滑点 0.1%
+  volume_check_window: 5  # 成交量检查窗口（分钟）
+  min_volume_ratio: 0.1  # 最小成交量比例
+
+# 熔断器
+circuit_breaker:
+  enabled: true
+  max_consecutive_losses: 3  # 最大连续亏损次数
+  consecutive_loss_threshold: 100  # 连续亏损阈值（USDT）
+  daily_loss_limit: 500  # 日亏损限额（USDT）
+  daily_profit_limit: 2000  # 日盈利限额（USDT）（防止过度贪婪）
+  cooldown_period: 3600  # 冷却时间（秒）
+
+# 交易所异常防护
+exchange_guard:
+  enabled: true
+  max_api_errors: 5  # 最大 API 错误次数
+  api_error_window: 60  # API 错误窗口（秒）
+  max_order_rejects: 3  # 最大订单拒绝次数
+  order_timeout: 10  # 订单超时（秒）
+  websocket_disconnect_threshold: 3  # WebSocket 断连阈值
+  auto_retry: true  # 自动重试
+  retry_delay: 5  # 重试延迟（秒）
+  max_retries: 3  # 最大重试次数
+
+# 价格异常检测
+price_anomaly:
+  enabled: true
+  max_price_change_ratio: 0.05  # 最大价格变化比例 5%
+  price_spike_threshold: 0.03  # 价格插针阈值 3%
+  volume_spike_threshold: 5.0  # 成交量异常倍数
+
+# 仓位限制
+position_limits:
+  max_single_position: 50000  # 单币种最大持仓（USDT）
+  max_total_position: 80000  # 总最大持仓（USDT）
+  max_position_ratio: 0.8  # 最大持仓比例
+  position_concentration_limit: 0.5  # 持仓集中度限制

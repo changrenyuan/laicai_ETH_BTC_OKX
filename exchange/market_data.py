@@ -1,0 +1,161 @@
+"""
+🔌 市场数据获取
+行情 / 资金费率
+"""
+
+from typing import Optional
+import logging
+from datetime import datetime
+
+from core.context import MarketData
+from .okx_client import OKXClient
+
+
+class MarketDataFetcher:
+    """
+    市场数据获取器
+    从交易所获取行情和资金费率数据
+    """
+
+    def __init__(self, okx_client: OKXClient, config: dict):
+        self.okx_client = okx_client
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+
+    async def get_market_data(self, symbol: str) -> Optional[MarketData]:
+        """
+        获取市场数据
+
+        Args:
+            symbol: 交易品种（如 BTC-USDT）
+
+        Returns:
+            MarketData: 市场数据对象
+        """
+        try:
+            # 获取现货价格
+            spot_ticker = await self.okx_client.get_ticker(symbol)
+            if not spot_ticker:
+                return None
+
+            spot_price = float(spot_ticker[0].get("last", 0))
+
+            # 获取合约价格
+            futures_symbol = f"{symbol}-SWAP"
+            futures_ticker = await self.okx_client.get_ticker(futures_symbol)
+            if not futures_ticker:
+                return None
+
+            futures_price = float(futures_ticker[0].get("last", 0))
+
+            # 获取资金费率
+            funding_rate_data = await self.okx_client.get_funding_rate(futures_symbol)
+            if not funding_rate_data:
+                return None
+
+            funding_rate = float(funding_rate_data[0].get("fundingRate", 0))
+            next_funding_time_str = funding_rate_data[0].get("nextFundingTime")
+
+            next_funding_time = None
+            if next_funding_time_str:
+                try:
+                    next_funding_time = datetime.fromisoformat(next_funding_time_str.replace("Z", "+00:00"))
+                except:
+                    pass
+
+            # 获取订单簿深度
+            order_book = await self.okx_client.get_order_book(futures_symbol, sz=1)
+            depth = {}
+
+            if order_book and len(order_book) > 0:
+                bids = order_book[0].get("bids", [])
+                asks = order_book[0].get("asks", [])
+
+                if bids:
+                    depth["bid_1_price"] = float(bids[0][0])
+                    depth["bid_1_amount"] = float(bids[0][1])
+
+                if asks:
+                    depth["ask_1_price"] = float(asks[0][0])
+                    depth["ask_1_amount"] = float(asks[0][1])
+
+            # 获取24h成交量
+            volume_24h = float(futures_ticker[0].get("volCcy24h", 0))
+
+            # 构建市场数据对象
+            market_data = MarketData(
+                symbol=symbol,
+                spot_price=spot_price,
+                futures_price=futures_price,
+                funding_rate=funding_rate,
+                next_funding_time=next_funding_time,
+                volume_24h=volume_24h,
+                depth=depth,
+            )
+
+            self.logger.info(
+                f"Market data for {symbol}: "
+                f"spot=${spot_price:.2f}, futures=${futures_price:.2f}, "
+                f"funding={funding_rate:.4%}"
+            )
+
+            return market_data
+
+        except Exception as e:
+            self.logger.error(f"Failed to get market data for {symbol}: {e}")
+            return None
+
+    async def get_multiple_market_data(self, symbols: list[str]) -> dict[str, MarketData]:
+        """
+        获取多个品种的市场数据
+
+        Args:
+            symbols: 交易品种列表
+
+        Returns:
+            dict: {symbol: MarketData}
+        """
+        market_data_dict = {}
+
+        for symbol in symbols:
+            data = await self.get_market_data(symbol)
+            if data:
+                market_data_dict[symbol] = data
+
+        return market_data_dict
+
+    async def get_funding_rate_history(
+        self,
+        symbol: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        获取资金费率历史
+
+        Args:
+            symbol: 交易品种
+            limit: 数量
+
+        Returns:
+            list: 资金费率历史
+        """
+        try:
+            futures_symbol = f"{symbol}-SWAP"
+            result = await self.okx_client.get_funding_rate(futures_symbol)
+
+            if not result:
+                return []
+
+            # 转换为标准格式
+            history = []
+            for item in result[:limit]:
+                history.append({
+                    "timestamp": item.get("fundingTime"),
+                    "funding_rate": float(item.get("fundingRate", 0)),
+                })
+
+            return history
+
+        except Exception as e:
+            self.logger.error(f"Failed to get funding rate history for {symbol}: {e}")
+            return []

@@ -1,0 +1,44 @@
+# 🧱 交易品种配置文件
+# BTC / ETH 交易参数配置
+
+# 交易品种列表
+instruments:
+  - symbol: "BTC-USDT"
+    base_currency: "BTC"
+    quote_currency: "USDT"
+    spot_symbol: "BTC-USDT"
+    futures_symbol: "BTC-USDT-SWAP"
+    min_position: 0.001  # 最小持仓（BTC）
+    max_position: 2.0  # 最大持仓（BTC）
+    tick_size: 0.01  # 价格精度
+    lot_size: 0.001  # 数量精度
+    enabled: true  # 是否启用
+
+  - symbol: "ETH-USDT"
+    base_currency: "ETH"
+    quote_currency: "USDT"
+    spot_symbol: "ETH-USDT"
+    futures_symbol: "ETH-USDT-SWAP"
+    min_position: 0.01  # 最小持仓（ETH）
+    max_position: 20.0  # 最大持仓（ETH）
+    tick_size: 0.01  # 价格精度
+    lot_size: 0.01  # 数量精度
+    enabled: true  # 是否启用
+
+# 订单类型配置
+order_types:
+  market_order: true  # 支持市价单
+  limit_order: true  # 支持限价单
+  post_only: false  # 是否仅挂单（不立即成交）
+  reduce_only: true  # 是否仅减仓
+
+# 交易时间配置
+trading_hours:
+  funding_rate_interval: 8  # 资金费率结算间隔（小时）
+  rebalance_check_interval: 60  # 再平衡检查间隔（分钟）
+  position_check_interval: 5  # 持仓检查间隔（分钟）
+
+# 价格监控配置
+price_monitor:
+  max_price_deviation: 0.02  # 现货与合约最大价差 2%
+  monitoring_enabled: true

@@ -1,0 +1,48 @@
+# 🧱 策略配置文件
+# 资金费率阈值 / 开关
+
+# 策略开关
+strategy:
+  enabled: true  # 总开关
+  dry_run: false  # 是否为空跑模式（不真实下单）
+
+# Cash & Carry 策略配置
+cash_and_carry:
+  # 开仓条件
+  open_conditions:
+    funding_rate_threshold: 0.0001  # 资金费率阈值 0.01%（正向）
+    min_funding_rate: 0.00005  # 最小资金费率 0.005%
+    max_funding_rate: 0.01  # 最大资金费率 1%（过高不追）
+
+  # 平仓条件
+  close_conditions:
+    funding_rate_threshold: -0.00005  # 资金费率负向阈值 -0.005%
+    min_profit: 0.005  # 最小盈利 0.5%
+    max_loss: 0.02  # 最大亏损 2%
+    max_holding_time: 720  # 最大持仓时间（小时，30天）
+
+  # 仓位管理
+  position_management:
+    initial_position_ratio: 0.5  # 初始仓位比例
+    max_position_ratio: 0.8  # 最大仓位比例
+    position_increment_ratio: 0.1  # 每次加仓比例
+    position_decrement_ratio: 0.2  # 每次减仓比例
+
+  # 资金费率监控
+  funding_monitor:
+    check_interval: 5  # 检查间隔（分钟）
+    funding_rate_window: 3  # 资金费率窗口（期数）
+    avg_funding_rate_threshold: 0.00008  # 平均资金费率阈值
+
+# 辅助策略（可选）
+auxiliary_strategies:
+  grid_trading:
+    enabled: false  # 默认关闭
+    adx_threshold: 25  # ADX 阈值，低于此值启动网格
+    grid_range_ratio: 0.05  # 网格范围 5%
+    grid_levels: 10  # 网格层数
+
+  trend_following:
+    enabled: false  # 默认关闭
+    stop_loss_ratio: 0.02  # 止损比例
+    take_profit_ratio: 0.05  # 止盈比例

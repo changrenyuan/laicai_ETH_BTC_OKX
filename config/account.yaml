@@ -1,0 +1,32 @@
+# 🧱 账户配置文件
+# 唯一可改参数入口 - 子账户 / 资金比例 / 最大风险
+
+# 交易所子账户配置
+sub_account:
+  name: "funding_arb"  # 子账户名称
+  api_key: "${OKX_API_KEY}"  # 从环境变量读取
+  api_secret: "${OKX_API_SECRET}"  # 从环境变量读取
+  api_passphrase: "${OKX_API_PASSPHRASE}"  # 从环境变量读取
+  sandbox: false  # 是否为模拟环境
+
+# 资金分配配置
+capital_allocation:
+  total_capital: 100000  # 总资金（USDT）
+  spot_ratio: 0.5  # 现货比例 50%
+  futures_ratio: 0.5  # 合约比例 50%
+  reserve_ratio: 0.1  # 预留资金比例 10%（用于追加保证金）
+
+# 风险限额
+risk_limits:
+  max_position_value: 50000  # 单币种最大持仓价值（USDT）
+  max_leverage: 3.0  # 最大杠杆倍数
+  max_daily_loss: 1000  # 单日最大亏损（USDT）
+  max_drawdown: 0.15  # 最大回撤 15%
+  emergency_stop_loss: 0.20  # 紧急止损 20%
+
+# 资金再平衡配置
+rebalance:
+  enabled: true
+  margin_ratio_threshold: 0.80  # 保证金率低于 80% 时触发再平衡
+  auto_transfer_enabled: true  # 自动从现货划转资金到合约
+  transfer_amount_ratio: 0.3  # 每次划转剩余资金的 30%
