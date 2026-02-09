@@ -8,3 +8,64 @@
 ⏰ 时间: 2026-02-09 11:19:47
 2026-02-09 11:19:58,270 - ERROR - Request failed: 
 2026-02-09 11:19:58,271 - INFO - OKX client disconnected
+2026-02-09 11:24:48,560 - INFO - OKX client connected
+2026-02-09 11:24:48,581 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:24:48,582 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 当前账户余额：
+  • 无可用余额
+
+⏰ 时间: 2026-02-09 11:24:48
+2026-02-09 11:24:48,602 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:24:48,602 - INFO - OKX client disconnected
+2026-02-09 11:37:28,907 - INFO - OKX client connected
+2026-02-09 11:37:28,936 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:37:28,936 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 账户余额：
+无可用余额
+2026-02-09 11:37:28,936 - INFO - OKX client disconnected
+2026-02-09 11:43:01,527 - INFO - OKX client connected
+2026-02-09 11:43:01,552 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:43:01,552 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 账户余额：
+无可用余额
+2026-02-09 11:43:01,552 - INFO - OKX client disconnected
+2026-02-09 11:43:16,921 - INFO - OKX client connected
+2026-02-09 11:43:16,942 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:43:16,942 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 账户余额：
+无可用余额
+2026-02-09 11:43:16,942 - INFO - OKX client disconnected
+2026-02-09 11:50:40,269 - INFO - OKX client connected
+2026-02-09 11:50:40,296 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:50:40,296 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 账户余额：
+无可用余额
+2026-02-09 11:50:40,296 - INFO - OKX client disconnected
+2026-02-09 11:53:52,016 - INFO - OKX client connected
+2026-02-09 11:53:52,034 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:53:52,034 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 账户余额：
+无可用余额
+2026-02-09 11:53:52,034 - INFO - OKX client disconnected
+2026-02-09 11:54:36,819 - INFO - OKX client session created
+2026-02-09 11:54:36,845 - ERROR - Request failed: Cannot connect to host www.okx.com:443 ssl:default [getaddrinfo failed]
+2026-02-09 11:54:36,845 - INFO - Notification: ✅ Phase 1 验收成功
+
+📊 账户余额：
+无可用余额
+2026-02-09 11:55:40,620 - INFO - Using Proxy: http://127.0.0.1:7897
+2026-02-09 11:55:40,620 - INFO - OKX client session created
+2026-02-09 11:55:52,120 - ERROR - Telegram connection error: 
+2026-02-09 11:55:52,120 - INFO - Notification: ✅ Phase 1 验收成功
+
+🌐 代理: http://127.0.0.1:7897
+📊 余额: 账户余额为 0
+2026-02-09 11:59:36,927 - INFO - Using Proxy: http://127.0.0.1:7897
+2026-02-09 11:59:36,927 - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x000001BC403C5BE0>

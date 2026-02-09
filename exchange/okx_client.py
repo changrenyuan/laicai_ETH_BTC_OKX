@@ -1,102 +1,107 @@
 """
-🔌 OKX 客户端 (Phase 1: 只读模式)
-封装只读接口：查询余额、查询持仓、查询价格
+🔌 OKX 客户端 (修复版：支持资金账户 + 交易账户)
 """
 
 import os
 import aiohttp
 import logging
-from typing import Optional, Dict, Any
-from datetime import datetime
-
+import hmac
+import base64
+import json
+import urllib.parse
+from typing import Optional, Dict
+from datetime import datetime, timezone
 
 class OKXClient:
-    """
-    OKX 交易所客户端（只读模式）
-    仅提供查询功能，不包含交易功能
-    """
-
     def __init__(self, config: dict):
         self.config = config
 
-        # API 配置
+        # 优先从环境变量读取
         self.api_key = os.getenv("OKX_API_KEY", config.get("api_key", ""))
         self.api_secret = os.getenv("OKX_API_SECRET", config.get("api_secret", ""))
         self.api_passphrase = os.getenv("OKX_API_PASSPHRASE", config.get("api_passphrase", ""))
         self.sandbox = config.get("sandbox", False)
 
-        # 基础URL
-        if self.sandbox:
-            self.base_url = "https://www.okx.com"  # 模拟环境
-        else:
-            self.base_url = "https://www.okx.com"
+        # 获取代理配置
+        self.proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
 
+        self.base_url = "https://www.okx.com"
         self.session: Optional[aiohttp.ClientSession] = None
-
         self.logger = logging.getLogger(__name__)
 
-    async def connect(self) -> bool:
-        """
-        建立连接
+        if self.proxy:
+            self.logger.info(f"Using Proxy: {self.proxy}")
 
-        Returns:
-            bool: 是否连接成功
-        """
+    async def connect(self) -> bool:
         try:
             if self.session is None:
                 self.session = aiohttp.ClientSession()
-            self.logger.info("OKX client connected")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to connect: {e}")
+            self.logger.error(f"Failed to create session: {e}")
             return False
 
     async def disconnect(self):
-        """断开连接"""
         if self.session:
             await self.session.close()
             self.session = None
-            self.logger.info("OKX client disconnected")
 
-    async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict] = None,
-        data: Optional[Dict] = None,
-    ) -> Optional[Dict]:
-        """
-        发送 HTTP 请求
+    def _get_timestamp(self) -> str:
+        return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
-        Args:
-            method: HTTP 方法
-            endpoint: API 端点
-            params: 查询参数
-            data: 请求体数据
+    def _sign(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        message = f"{timestamp}{method.upper()}{request_path}{body}"
+        mac = hmac.new(
+            bytes(self.api_secret, encoding='utf8'),
+            bytes(message, encoding='utf-8'),
+            digestmod='sha256'
+        )
+        return base64.b64encode(mac.digest()).decode()
 
-        Returns:
-            Dict: 响应数据
-        """
+    def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
+        timestamp = self._get_timestamp()
+        sign = self._sign(timestamp, method, request_path, body)
+        headers = {
+            "OK-ACCESS-KEY": self.api_key,
+            "OK-ACCESS-SIGN": sign,
+            "OK-ACCESS-TIMESTAMP": timestamp,
+            "OK-ACCESS-PASSPHRASE": self.api_passphrase,
+            "Content-Type": "application/json",
+        }
+        if self.sandbox:
+            headers["x-simulated-trading"] = "1"
+        return headers
+
+    async def _request(self, method: str, endpoint: str, params: Optional[Dict] = None, data: Optional[Dict] = None) -> Optional[Dict]:
         if not self.session:
             await self.connect()
 
-        url = f"{self.base_url}{endpoint}"
+        request_path = endpoint
+        if method.upper() == "GET" and params:
+            query_string = urllib.parse.urlencode(params)
+            request_path = f"{endpoint}?{query_string}"
+
+        body_str = json.dumps(data) if data else ""
+        headers = self._get_headers(method, request_path, body_str)
+        url = f"{self.base_url}{request_path}"
 
         try:
-            headers = self._get_headers(method, endpoint, params, data)
-
             async with self.session.request(
                 method=method,
                 url=url,
-                params=params,
-                json=data,
+                data=body_str if data else None,
                 headers=headers,
+                proxy=self.proxy,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
-                result = await response.json()
+                if response.status != 200:
+                    text = await response.text()
+                    self.logger.error(f"API HTTP Error {response.status}: {text}")
+                    return None
 
+                result = await response.json()
                 if result.get("code") != "0":
-                    self.logger.error(f"API error: {result}")
+                    self.logger.error(f"API Business Error: {result}")
                     return None
 
                 return result.get("data")
@@ -105,127 +110,42 @@ class OKXClient:
             self.logger.error(f"Request failed: {e}")
             return None
 
-    def _get_headers(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict] = None,
-        data: Optional[Dict] = None,
-    ) -> Dict[str, str]:
+    # ============ 核心查询接口 ============
+
+    # 1. 查询交易账户 (Trading / Unified Account)
+    # 这里的钱可以用来开单
+    async def get_trading_balances(self):
+        """查询交易账户余额"""
+        return await self._request("GET", "/api/v5/account/balance")
+
+    # 2. 查询资金账户 (Funding / Asset Account) - 新增！
+    # 这里是充值默认到账的地方，不能直接开单
+    async def get_funding_balances(self, ccy: str = None):
+        """查询资金账户余额"""
+        params = {}
+        if ccy:
+            params['ccy'] = ccy
+        return await self._request("GET", "/api/v5/asset/balances", params=params)
+
+    # 3. 资金划转 (资金账户 <-> 交易账户) - 为 Phase 2 准备
+    async def transfer_funds(self, ccy: str, amt: float, from_type: str, to_type: str):
         """
-        生成请求头（带签名）
-
-        注意：这是简化版本，生产环境需要完整的签名逻辑
+        资金划转
+        from_type/to_type: "6"(资金账户), "18"(交易账户)
         """
-        timestamp = str(int(datetime.now().timestamp() * 1000))
-
-        # TODO: 实现完整的 OKX 签名逻辑
-        # 签名算法：base64(hmac_sha256(timestamp + method + requestPath + body, secret))
-        # 暂时使用空字符串，实际使用时需要实现完整签名
-
-        return {
-            "OK-ACCESS-KEY": self.api_key,
-            "OK-ACCESS-SIGN": "",
-            "OK-ACCESS-TIMESTAMP": timestamp,
-            "OK-ACCESS-PASSPHRASE": self.api_passphrase,
-            "Content-Type": "application/json",
+        data = {
+            "ccy": ccy,
+            "amt": str(amt),
+            "from": from_type,
+            "to": to_type
         }
+        return await self._request("POST", "/api/v5/asset/transfer", data=data)
 
-    # ============ Phase 1: 只读接口 ============
+    async def get_positions(self, inst_type: str = "SWAP"):
+        return await self._request("GET", "/api/v5/account/positions", params={"instType": inst_type})
 
-    # 1. 查询余额
-    async def get_balance(self, currency: str = "USDT") -> Optional[Dict]:
-        """
-        获取指定货币的余额
+    async def get_ticker(self, inst_id: str):
+        return await self._request("GET", "/api/v5/market/ticker", params={"instId": inst_id})
 
-        Args:
-            currency: 货币单位，如 "USDT"
-
-        Returns:
-            Dict: 余额信息
-        """
-        result = await self._request(
-            "GET",
-            "/api/v5/account/balance",
-            params={"ccy": currency},
-        )
-        return result
-
-    async def get_all_balances(self) -> Optional[Dict]:
-        """
-        获取所有货币的余额
-
-        Returns:
-            Dict: 所有余额信息
-        """
-        result = await self._request(
-            "GET",
-            "/api/v5/account/balance",
-        )
-        return result
-
-    # 2. 查询持仓
-    async def get_positions(self, inst_type: str = "SWAP") -> Optional[Dict]:
-        """
-        获取持仓信息
-
-        Args:
-            inst_type: 产品类型，默认 "SWAP"（永续合约）
-
-        Returns:
-            Dict: 持仓信息
-        """
-        result = await self._request(
-            "GET",
-            "/api/v5/account/positions",
-            params={"instType": inst_type},
-        )
-        return result
-
-    # 3. 查询价格
-    async def get_ticker(self, inst_id: str) -> Optional[Dict]:
-        """
-        获取最新价格（行情）
-
-        Args:
-            inst_id: 产品ID，如 "BTC-USDT-SWAP"
-
-        Returns:
-            Dict: 行情数据
-        """
-        result = await self._request(
-            "GET",
-            "/api/v5/market/ticker",
-            params={"instId": inst_id},
-        )
-        return result
-
-    # 4. 查询账户配置
-    async def get_account_config(self) -> Optional[Dict]:
-        """
-        获取账户配置信息
-
-        Returns:
-            Dict: 账户配置
-        """
-        result = await self._request(
-            "GET",
-            "/api/v5/account/config",
-        )
-        return result
-
-    # ============ Phase 2 以后的功能（暂不实现） ============
-    # 以下功能将在后续阶段实现：
-    # - place_order()  # 下单
-    # - cancel_order()  # 撤单
-    # - transfer()  # 资金划转
-    # 等...
-
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
-        await self.disconnect()
+    async def get_funding_rate(self, inst_id: str):
+        return await self._request("GET", "/api/v5/public/funding-rate", params={"instId": inst_id})
