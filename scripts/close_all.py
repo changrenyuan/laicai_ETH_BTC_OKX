@@ -1,133 +1,142 @@
 """
-🛠 一键平仓脚本
-紧急情况下平掉所有持仓
+🛠 一键平仓脚本 (Phase 2 独立版)
+紧急情况下平掉所有持仓，撤销所有挂单。
+不依赖高级模块，直接调用 API，确保最高可靠性。
 """
 
 import sys
 import asyncio
+import logging
 from pathlib import Path
+import yaml
+import os
+from dotenv import load_dotenv
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from execution.rebalancer import Rebalancer
-from core.context import Context
 from exchange.okx_client import OKXClient
-from execution.order_manager import OrderManager
-from execution.position_manager import PositionManager
-from monitor.notifier import Notifier
-import yaml
 
+# 配置简单的日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-async def main():
-    """主函数"""
-    print("=" * 60)
-    print("🔥 一键平仓脚本")
-    print("=" * 60)
-
-    # 确认
-    confirm = input("\n⚠️  警告：此操作将平掉所有持仓！\n确定要继续吗？(yes/no): ")
-
-    if confirm.lower() != "yes":
-        print("❌ 操作已取消")
-        return 0
-
-    print("\n开始平仓流程...")
-
-    # 加载配置
-    print("\n📋 加载配置...")
-
-    config_dir = Path(__file__).parent.parent / "config"
-
-    with open(config_dir / "account.yaml", "r", encoding="utf-8") as f:
-        account_config = yaml.safe_load(f)
-
-    with open(config_dir / "risk.yaml", "r", encoding="utf-8") as f:
-        risk_config = yaml.safe_load(f)
-
-    # 创建上下文
-    print("创建上下文...")
-    context = Context(config_dir="config", data_dir="data")
-
-    # 创建交易所客户端
-    print("连接交易所...")
-    okx_client = OKXClient(account_config["sub_account"])
-    await okx_client.connect()
-
-    # 创建通知器
-    notifier = Notifier(risk_config)
-
-    # 创建订单管理器
-    order_manager = OrderManager({}, okx_client)
-
-    # 创建持仓管理器
-    position_manager = PositionManager({}, order_manager, okx_client)
-
-    # 创建再平衡器
-    rebalancer = Rebalancer({}, None, position_manager, okx_client)
-
+async def close_position(client: OKXClient, symbol: str, direction: str):
+    """平掉单个仓位"""
     try:
-        # 获取当前持仓
-        print("\n📊 获取当前持仓...")
+        inst_id = f"{symbol}-SWAP"
+        # 构造平仓请求
+        data = {
+            "instId": inst_id,
+            "mgnMode": "cross", # 假设全仓，如果你的策略是逐仓需改为 isolated
+        }
+        if direction != "net":
+            data["posSide"] = direction # long/short
 
-        from exchange.account_data import AccountDataFetcher
-        account_fetcher = AccountDataFetcher(okx_client, {})
+        logger.info(f"正在平仓 {inst_id} ({direction})...")
 
-        all_positions = await account_fetcher.get_all_positions()
+        # 直接调用 API，不走 OrderManager
+        result = await client._request("POST", "/api/v5/trade/close-position", data=data)
 
-        if not all_positions:
-            print("✅ 当前没有持仓")
-            return 0
-
-        print(f"发现 {len(all_positions)} 个持仓:")
-        for symbol, position in all_positions.items():
-            print(f"  - {symbol}: {position.quantity} @ ${position.entry_price:.2f}")
-
-        # 获取市场数据
-        print("\n📊 获取市场数据...")
-        from exchange.market_data import MarketDataFetcher
-        market_fetcher = MarketDataFetcher(okx_client, {})
-
-        for symbol in all_positions.keys():
-            market_data = await market_fetcher.get_market_data(symbol)
-            if market_data:
-                context.update_market_data(market_data)
-
-        # 更新持仓信息
-        for symbol, position in all_positions.items():
-            context.update_position(position)
-
-        # 执行平仓
-        print("\n🔄 执行平仓操作...")
-
-        success = await rebalancer.emergency_close_all(context, notifier)
-
-        if success:
-            print("\n✅ 所有持仓已成功平仓")
-
-            # 发送通知
-            await notifier.send_alert("🔥 紧急平仓：所有持仓已平掉", level="critical")
-
-            return 0
+        if result is not None:
+            logger.info(f"✅ {inst_id} 平仓请求已发送")
+            return True
         else:
-            print("\n❌ 平仓失败，请检查日志")
-            return 1
+            logger.error(f"❌ {inst_id} 平仓失败 (API返回空)")
+            return False
 
     except Exception as e:
-        print(f"\n❌ 平仓过程中出错: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ {symbol} 平仓异常: {e}")
+        return False
 
-        await notifier.send_alert(f"🔥 紧急平仓失败: {e}", level="critical")
+async def cancel_all_orders(client: OKXClient):
+    """撤销所有挂单"""
+    logger.info("正在撤销所有挂单...")
+    try:
+        # 获取所有未成交订单
+        pending = await client._request("GET", "/api/v5/trade/orders-pending", params={"instType": "SWAP"})
+        if not pending:
+            logger.info("✅ 当前无挂单")
+            return
 
-        return 1
+        for order in pending:
+            inst_id = order.get("instId")
+            ord_id = order.get("ordId")
+            logger.info(f"撤销订单: {inst_id} (ID: {ord_id})")
+
+            await client._request("POST", "/api/v5/trade/cancel-order", data={
+                "instId": inst_id,
+                "ordId": ord_id
+            })
+
+    except Exception as e:
+        logger.error(f"❌ 撤单异常: {e}")
+
+async def main():
+    print("=" * 60)
+    print("🔥 一键平仓脚本 (Panic Button - 独立版)")
+    print("=" * 60)
+
+    # 1. 确认
+    confirm = input("\n⚠️  警告：此操作将市价平掉所有合约持仓并撤单！\n确定要继续吗？(输入 yes 确认): ")
+    if confirm.lower() != "yes":
+        print("操作已取消")
+        return
+
+    # 2. 加载配置
+    try:
+        load_dotenv() # 加载 .env
+        config_path = Path(__file__).parent.parent / "config" / "account.yaml"
+
+        # 简单读取 yaml 用于获取子账户名（其实 api key 主要靠 env）
+        with open(config_path, "r", encoding="utf-8") as f:
+            account_config = yaml.safe_load(f)
+
+        print("✅ 配置加载成功")
+    except Exception as e:
+        print(f"❌ 配置加载失败: {e}")
+        return
+
+    # 3. 连接交易所
+    client = OKXClient(account_config.get("sub_account", {}))
+    if not await client.connect():
+        print("❌ 无法连接交易所，请检查网络或代理")
+        return
+
+    try:
+        # 4. 撤销所有挂单
+        await cancel_all_orders(client)
+
+        # 5. 获取持仓
+        print("\n📊 获取当前持仓...")
+        positions_data = await client.get_positions()
+
+        active_positions = []
+        if positions_data:
+            active_positions = [p for p in positions_data if float(p.get("pos", 0)) != 0]
+
+        if not active_positions:
+            print("✅ 当前无活跃持仓")
+            return
+
+        print(f"发现 {len(active_positions)} 个持仓，准备平仓...")
+
+        # 6. 执行平仓
+        tasks = []
+        for pos in active_positions:
+            inst_id = pos.get("instId")
+            symbol = inst_id.replace("-SWAP", "")
+            pos_side = pos.get("posSide", "net")
+
+            tasks.append(close_position(client, symbol, pos_side))
+
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        print("\n✅ 所有操作执行完毕。请务必登录 OKX APP 确认最终状态！")
 
     finally:
-        # 断开连接
-        await okx_client.disconnect()
-        print("\n🔌 已断开交易所连接")
-
+        await client.disconnect()
 
 if __name__ == "__main__":
-    exit_code = asyncio.run(main())
-    sys.exit(exit_code)
+    asyncio.run(main())
