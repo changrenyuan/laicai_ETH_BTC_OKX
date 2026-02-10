@@ -87,6 +87,20 @@ class MarginGuard:
 
         return result
 
+    async def check_margin_ratio(self, context: Context) -> float:
+        """
+        简化版保证金检查，直接返回保证金率
+        主循环中快速调用此方法
+        """
+        # 计算保证金率
+        margin_ratio = context.calculate_margin_ratio()
+        context.margin_ratio = margin_ratio
+
+        # 记录检查时间
+        self.last_check_time = datetime.now()
+
+        return margin_ratio
+
     def _generate_message(
         self,
         margin_ratio: float,

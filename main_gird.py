@@ -181,6 +181,29 @@ class QuantEngine:
         state_machine = StateMachine(event_bus)
         context = Context()
 
+        # 确保初始化必要的属性
+        if not hasattr(context, 'liquidity_depth'):
+            context.liquidity_depth = 0.0
+        if not hasattr(context, 'last_scan_time'):
+            context.last_scan_time = 0.0
+        if not hasattr(context, 'market_snapshot'):
+            context.market_snapshot = {}
+        if not hasattr(context, 'last_trade_time'):
+            context.last_trade_time = 0.0
+        if not hasattr(context, 'trade_history'):
+            context.trade_history = []
+        if not hasattr(context, 'balances'):
+            context.balances = {}
+
+        # 初始化默认余额（USDT），避免空字典错误
+        from core.context import Balance
+        context.balances["USDT"] = Balance(
+            currency="USDT",
+            available=0.0,
+            frozen=0.0,
+            total=0.0
+        )
+
         self.components["event_bus"] = event_bus
         self.components["state_machine"] = state_machine
         self.components["context"] = context
@@ -196,6 +219,23 @@ class QuantEngine:
         ctx = self.components["context"]
         sm = self.components["state_machine"]
         bus = self.components["event_bus"]
+
+        # 0. 同步账户余额到 Context
+        from core.context import Balance
+        bal = await client.get_trading_balances()
+        if bal and len(bal) > 0:
+            details = bal[0]['details']
+            for detail in details:
+                ccy = detail.get('ccy', 'USDT')
+                avail = float(detail.get('availBal', 0))
+                frozen = float(detail.get('frozenBal', 0))
+                ctx.balances[ccy] = Balance(
+                    currency=ccy,
+                    available=avail,
+                    frozen=frozen,
+                    total=avail + frozen
+                )
+            Dashboard.log(f"✅ 已同步 {len(ctx.balances)} 种货币余额", "SUCCESS")
 
         # 1. 组装执行层
         order_manager = OrderManager(client, sm, bus)
@@ -263,135 +303,321 @@ class QuantEngine:
     async def phase_7_start_machine(self):
         Dashboard.log("【7】启动状态机...", "INFO")
         sm = self.components["state_machine"]
-        if sm.get_current_state() != SystemState.IDLE:
-            await sm.transition_to(SystemState.IDLE, reason="Engine Start")
+
+        # 初始化状态转换：IDLE -> INITIALIZING -> READY -> MONITORING
+        current_state = sm.get_current_state()
+        if current_state == SystemState.IDLE:
+            # 第一步：IDLE -> INITIALIZING
+            await sm.transition_to(SystemState.INITIALIZING, reason="初始化组件")
+            # 第二步：INITIALIZING -> READY
+            await sm.transition_to(SystemState.READY, reason="组件就绪")
+            # 第三步：READY -> MONITORING
+            await sm.transition_to(SystemState.MONITORING, reason="系统启动")
+            Dashboard.log("✅ 状态机已启动，当前状态: MONITORING", "SUCCESS")
+        else:
+            Dashboard.log(f"⚠️ 状态机已在运行: {current_state.value}", "WARNING")
 
     # =========================================================================
     # Phase 8: 主循环 (The Loop)
     # =========================================================================
-        # =========================================================================
-        # Phase 8: 主循环 (The Loop) - 严格遵循流程图
-        # =========================================================================
     async def phase_8_main_loop(self):
         Dashboard.log("⭐⭐⭐ 引擎启动完成，进入主循环 ⭐⭐⭐", "SUCCESS")
         print("-" * 80)
 
-        # 组件引用
-        sm = self.components["state_machine"]
-        ctx = self.components["context"]
         circuit = self.components["circuit_breaker"]
         ex_guard = self.components["exchange_guard"]
         margin_guard = self.components["margin_guard"]
+        liquidity_guard = self.components["liquidity_guard"]
+        pnl_tracker = self.components["pnl_tracker"]
+        position_manager = self.components["position_manager"]
+        context = self.components["context"]
+        sm = self.components["state_machine"]
 
-        # 计时器
         last_heartbeat = 0
-        heartbeat_intv = 2
-
-        # 调度间隔 (模拟 Scheduler 触发)
-        SCAN_INTERVAL = 5  # 每5秒扫描一次
+        heartbeat_intv = 5
         last_scan_time = 0
+        scan_interval = 60  # 市场扫描间隔（秒）
 
         while self.is_running:
             try:
                 now = time.time()
 
-                # ---------------------------------------------------------
-                # 【State = IDLE】 等待调度触发
-                # ---------------------------------------------------------
-                if sm.get_current_state() != SystemState.IDLE:
-                    # 如果状态不对（比如卡在 STOPPED），强制复位或等待
-                    await asyncio.sleep(1)
-                    continue
-
-                # 检查是否到达扫描时间 (Scheduler 逻辑)
-                if now - last_scan_time < SCAN_INTERVAL:
-                    # --- Dashboard 心跳 (空闲时刷新) ---
-                    if now - last_heartbeat > heartbeat_intv:
-                        self._print_heartbeat()
-                        last_heartbeat = now
-                    await asyncio.sleep(0.1)
-                    continue
-
-                last_scan_time = now
-
-                # ---------------------------------------------------------
-                # 【8】市场扫描 (Scanner)
-                # ---------------------------------------------------------
-                # 这一步通常在 Strategy.calculate_signal 里做，
-                # 但 Main 负责记录这个动作
-                # Dashboard.log("正在扫描市场...", "INFO") # 可选，太频繁可注释
-
-                # ---------------------------------------------------------
-                # 【9】策略判断 (Strategy)
-                # ---------------------------------------------------------
-                # 获取策略信号 (这里简化为 run_tick 内部判断，但在逻辑上属于这一步)
-                # 如果是震荡/无机会，策略内部直接 return，对应流程图的 (None -> IDLE)
-
-                # ---------------------------------------------------------
-                # 【10】风控审批 (Risk Gateway)
-                # ---------------------------------------------------------
-                # 1. 熔断检查
+                # ============ 步骤1: 全局风控检查 ============
                 if circuit.is_triggered():
-                    print("")
-                    Dashboard.log("🚫 [熔断] 市场波动剧烈，拒绝交易", "WARNING")
+                    Dashboard.log("🚫 [熔断] 系统熔断中，暂停交易...", "WARNING")
                     await asyncio.sleep(5)
                     continue
 
-                # 2. API 健康检查
                 if not ex_guard.is_healthy():
-                    print("")
-                    Dashboard.log("⚠️ [API] 交易所连接不稳定，拒绝交易", "WARNING")
+                    Dashboard.log("⚠️ [API] 交易所连接不稳定...", "WARNING")
                     await asyncio.sleep(5)
                     continue
 
-                # 3. 保证金检查 (比如保证金率 < 300% 禁止开新仓)
-                # 这里我们需要传入 Context 里的实时数据
-                # if not margin_guard.check_threshold(ctx.margin_ratio):
-                #     Dashboard.log("🛡️ [风控] 保证金不足，拒绝开仓", "WARNING")
-                #     continue
+                # ============ 步骤2: 保证金检查 ============
+                await margin_guard.check_margin_ratio(context)
+                if context.margin_ratio < 1.5:  # 低于150%时报警
+                    Dashboard.log(f"🚨 [保证金] 保证金率过低: {context.margin_ratio:.2f}%", "ERROR")
+                    await sm.transition_to(SystemState.ERROR, reason="保证金不足")
 
-                # ---------------------------------------------------------
-                # 【11】执行前状态锁定 (State Locking)
-                # ---------------------------------------------------------
-                # 只有通过了风控，才允许进入执行状态
-                await sm.transition_to(SystemState.RUNNING, reason="Signal Triggered")
+                # ============ 步骤3: 市场扫描 (定时触发) ============
+                if now - last_scan_time > scan_interval:
+                    Dashboard.log("📡 [扫描] 开始市场扫描...", "INFO")
+                    await self._scan_market(context)
+                    last_scan_time = now
+                    Dashboard.log(f"✅ [扫描] 市场扫描完成，流动性深度: {context.liquidity_depth:.2f}", "SUCCESS")
 
-                # ---------------------------------------------------------
-                # 【12】执行层 (Execution)
-                # ---------------------------------------------------------
-                # 调用策略执行逻辑 (下单/补单/撤单)
-                # 这里对应流程图的 "原子下单" 和 "处理跛脚"
-                await self.strategy.run_tick()
+                # ============ 步骤4: 策略信号判断 ============
+                # 只在 MONITORING 状态下接受新信号（系统正常监控中）
+                if sm.get_current_state() == SystemState.MONITORING:
+                    signal = await self.strategy.analyze_signal()
 
-                # ---------------------------------------------------------
-                # 【13】更新 Context & PnL
-                # ---------------------------------------------------------
-                # 交易完成后，立即刷新一次账户状态
-                # 实际项目中，这里可以调用 client.get_positions() 更新 context
-                # await self.phase_3_connect() # 简化版：复用连接时的拉取逻辑刷新UI
+                    if signal:
+                        Dashboard.log(f"🎯 [信号] 检测到交易信号: {signal}", "INFO")
+                    else:
+                        # 没有信号时也输出日志，让用户知道系统在工作
+                        # 每分钟只输出一次，避免刷屏
+                        if int(now) % 60 == 0:
+                            Dashboard.log("📊 [扫描] 市场扫描中，暂无交易信号", "INFO")
 
-                # ---------------------------------------------------------
-                # 【14】恢复 State → IDLE
-                # ---------------------------------------------------------
-                await sm.transition_to(SystemState.IDLE, reason="Execution Complete")
+                        # ============ 步骤5: 风控审批 ============
+                        approval = await self._risk_approve(signal, context)
+
+                        if not approval["approved"]:
+                            Dashboard.log(f"❌ [风控] 信号被拒绝: {approval['reason']}", "WARNING")
+                        else:
+                            # ============ 步骤6: 执行前状态锁定 ============
+                            await sm.transition_to(SystemState.OPENING_POSITION, reason="执行交易")
+
+                            try:
+                                # ============ 步骤7: 执行交易 ============
+                                execution_result = await self.strategy.execute(signal, approval)
+
+                                if execution_result["success"]:
+                                    Dashboard.log("✅ [执行] 交易执行成功", "SUCCESS")
+
+                                    # ============ 步骤8: 更新 Context & PnL ============
+                                    await self._update_context_after_trade(
+                                        context, position_manager, pnl_tracker, signal, execution_result
+                                    )
+
+                                    # ============ 步骤9: 恢复状态 ============
+                                    await sm.transition_to(SystemState.IDLE, reason="执行完成")
+                                else:
+                                    Dashboard.log(f"❌ [执行] 交易失败: {execution_result['error']}", "ERROR")
+                                    await sm.transition_to(SystemState.ERROR, reason="交易失败")
+
+                            except Exception as e:
+                                Dashboard.log(f"❌ [异常] 交易执行异常: {e}", "ERROR")
+                                logger.error(traceback.format_exc())
+                                await sm.transition_to(SystemState.ERROR, reason="执行异常")
+
+                # ============ 步骤10: Dashboard 心跳 ============
+                if now - last_heartbeat > heartbeat_intv:
+                    self._print_heartbeat()
+                    last_heartbeat = now
+
+                await asyncio.sleep(1)
 
             except Exception as e:
-                print("")  # 换行
                 Dashboard.log(f"主循环异常: {e}", "ERROR")
                 logger.error(traceback.format_exc())
-
-                # 发生异常，强制恢复 IDLE 状态，防止死锁
-                await sm.transition_to(SystemState.IDLE, reason="Error Recovery")
+                await sm.transition_to(SystemState.ERROR, reason="主循环异常")
                 await asyncio.sleep(5)
-    def _print_heartbeat(self):
-        """控制台动态心跳，不刷屏"""
+
+    # =========================================================================
+    # 辅助方法：市场扫描
+    # =========================================================================
+    async def _scan_market(self, context: Context):
+        """
+        【8】市场扫描
+        - 拉取 K 线数据
+        - 分析趋势
+        - 检查流动性
+        """
         try:
-            # 尝试获取策略关注的 Symbol
+            client = self.components["client"]
+
+            # 获取多个周期的 K 线
+            periods = ["1D", "4H", "15m"]
+            market_data = {}
+
+            for period in periods:
+                if hasattr(client, 'get_candlesticks'):
+                    klines = await client.get_candlesticks(self.strategy.symbol, bar=period, limit=50)
+                    if klines:
+                        market_data[period] = klines
+                        logger.debug(f"获取 {period} K线成功: {len(klines)} 条")
+                    else:
+                        logger.warning(f"获取 {period} K线失败: 返回空")
+                else:
+                    logger.warning("Client 缺少 get_candlesticks 方法，跳过K线获取")
+
+            # 更新 Context
+            context.market_snapshot = market_data
+            context.last_scan_time = time.time()
+
+            # 检查流动性
+            ticker = await client.get_ticker(self.strategy.symbol)
+            if ticker:
+                context.liquidity_depth = float(ticker[0].get('askSz', 0))
+                logger.info(f"流动性深度: {context.liquidity_depth}")
+            else:
+                logger.warning("获取 ticker 失败")
+
+        except Exception as e:
+            logger.error(f"市场扫描失败: {e}")
+            Dashboard.log(f"⚠️ [扫描] 市场扫描异常: {e}", "WARNING")
+
+    # =========================================================================
+    # 辅助方法：风控审批
+    # =========================================================================
+    async def _risk_approve(self, signal: dict, context: Context) -> dict:
+        """
+        【10】风控审批
+        - 检查熔断状态
+        - 计算最大仓位
+        - 设置止损止盈线
+        """
+        approval = {
+            "approved": True,
+            "reason": "",
+            "max_position": 0,
+            "stop_loss": 0,
+            "take_profit": 0
+        }
+
+        try:
+            circuit = self.components["circuit_breaker"]
+            margin_guard = self.components["margin_guard"]
+            liquidity_guard = self.components["liquidity_guard"]
+
+            # 1. 检查熔断器
+            if circuit.is_triggered():
+                approval["approved"] = False
+                approval["reason"] = "熔断器已触发"
+                return approval
+
+            # 2. 检查保证金
+            if context.margin_ratio < 2.0:  # 低于200%拒绝新交易
+                approval["approved"] = False
+                approval["reason"] = f"保证金率过低: {context.margin_ratio:.2f}%"
+                return approval
+
+            # 3. 检查流动性
+            liquidity_ok = await liquidity_guard.check_liquidity(context)
+            if not liquidity_ok:
+                approval["approved"] = False
+                approval["reason"] = "流动性不足"
+                return approval
+
+            # 4. 计算最大仓位（基于保证金）
+            usdt_balance = context.balances.get("USDT")
+            max_usdt = usdt_balance.available if usdt_balance else 0.0
+            max_position = max_usdt * 0.3  # 最多使用30%保证金
+            approval["max_position"] = max_position
+
+            # 5. 设置止损止盈（基于信号）
+            signal_type = signal.get("type", "neutral")
+            entry_price = signal.get("price", 0)
+
+            if signal_type == "long":
+                approval["stop_loss"] = entry_price * 0.97  # 止损3%
+                approval["take_profit"] = entry_price * 1.05  # 止盈5%
+            elif signal_type == "short":
+                approval["stop_loss"] = entry_price * 1.03  # 止损3%
+                approval["take_profit"] = entry_price * 0.95  # 止盈5%
+
+            Dashboard.log("✅ [风控] 信号通过审批", "SUCCESS")
+
+        except Exception as e:
+            approval["approved"] = False
+            approval["reason"] = f"风控检查异常: {e}"
+            logger.error(traceback.format_exc())
+
+        return approval
+
+    # =========================================================================
+    # 辅助方法：更新 Context & PnL
+    # =========================================================================
+    async def _update_context_after_trade(
+        self, context: Context, position_manager, pnl_tracker, signal: dict, execution_result: dict
+    ):
+        """
+        【13】更新 Context & PnL
+        - 同步仓位信息
+        - 计算浮动盈亏
+        - 记录交易历史
+        """
+        try:
+            # 获取状态机
+            sm = self.components["state_machine"]
+
+            # 1. 同步仓位
+            await position_manager.sync_positions(context)
+
+            # 2. 更新交易时间
+            context.last_trade_time = time.time()
+
+            # 3. 计算 PnL
+            if "position" in execution_result:
+                await pnl_tracker.update_pnl(execution_result["position"])
+
+            # 4. 记录交易日志
+            trade_record = {
+                "timestamp": time.time(),
+                "signal": signal,
+                "execution": execution_result,
+                "state": sm.get_current_state().value
+            }
+
+            if not hasattr(context, "trade_history"):
+                context.trade_history = []
+            context.trade_history.append(trade_record)
+
+            Dashboard.log("✅ [Context] 上下文已更新", "SUCCESS")
+
+        except Exception as e:
+            logger.error(f"更新 Context 失败: {e}")
+
+    def _print_heartbeat(self):
+        """控制台动态心跳，显示系统运行状态"""
+        try:
+            import datetime
+
+            # 获取关键信息
+            sm = self.components.get("state_machine")
+            context = self.components.get("context")
             sym = getattr(self.strategy, 'symbol', 'UNKNOWN')
-            # 这里简单打印，实际可扩展为刷新价格
-            pass
-        except:
-            pass
+
+            # 计算运行时间
+            if context and hasattr(context, 'start_time'):
+                uptime = datetime.datetime.now() - context.start_time
+                uptime_str = str(uptime).split('.')[0]  # 去掉微秒
+            else:
+                uptime_str = "N/A"
+
+            # 当前状态
+            current_state = sm.get_current_state().value if sm else "N/A"
+
+            # 最后扫描时间
+            last_scan = "N/A"
+            if context and hasattr(context, 'last_scan_time') and context.last_scan_time > 0:
+                seconds_ago = int(time.time() - context.last_scan_time)
+                last_scan = f"{seconds_ago}s ago"
+
+            # 构建心跳信息
+            heartbeat_info = (
+                f"💓 [心跳] 状态: {current_state:15} | "
+                f"策略: {sym:20} | "
+                f"运行: {uptime_str:15} | "
+                f"扫描: {last_scan:10}"
+            )
+
+            # 直接打印到控制台（不通过 Dashboard.log，因为可能被重定向到文件）
+            print(f"\r{heartbeat_info}", end="", flush=True)
+
+        except Exception as e:
+            print(f"\r💓 [心跳] 系统运行中... (获取详情失败: {e})", end="", flush=True)
 
     # =========================================================================
     # Shutdown: 安全退出

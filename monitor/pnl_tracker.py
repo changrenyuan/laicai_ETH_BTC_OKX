@@ -66,3 +66,13 @@ class PnLTracker:
         self.history.append(rec)
 
         self.logger.info(f"📈 PnL Snapshot: Total=${current_equity:.2f} (Profit: ${total_profit:.2f})")
+
+    async def update_pnl(self, position: dict):
+        """
+        更新 PnL
+        在交易完成后调用
+        """
+        # 这里可以根据 position 信息更新 PnL
+        # 暂时留空，实际需要实现详细的 PnL 计算
+        self.logger.debug(f"Updating PnL for position: {position}")
+        pass

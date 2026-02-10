@@ -110,6 +110,22 @@ class LiquidityGuard:
             message=message,
         )
 
+    async def check_liquidity(self, context: Context) -> bool:
+        """
+        简化版流动性检查，用于主循环快速调用
+        返回 True 表示流动性充足，False 表示不足
+        """
+        # 使用 Context 中的流动性深度
+        if context.liquidity_depth <= 0:
+            return False
+
+        # 检查深度是否满足最小阈值
+        depth_ok = context.liquidity_depth >= self.min_depth_threshold
+
+        self.last_check_time = datetime.now()
+
+        return depth_ok
+
     def _calculate_depth(self, market_data: MarketData) -> float:
         """计算深度"""
         # 获取买一卖一深度

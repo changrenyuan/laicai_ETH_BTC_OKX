@@ -6,11 +6,12 @@ import logging
 import asyncio
 from core.context import Context
 from core.state_machine import StateMachine, SystemState
+from strategy.base_strategy import BaseStrategy
 from strategy.conditions import StrategyConditions
 from execution.order_manager import OrderManager
 from risk.margin_guard import MarginGuard
 
-class CashAndCarryStrategy:
+class CashAndCarryStrategy(BaseStrategy):
     def __init__(self,
                  config: dict,
                  context: Context,
@@ -18,10 +19,7 @@ class CashAndCarryStrategy:
                  order_manager: OrderManager,
                  margin_guard: MarginGuard):
 
-        self.config = config
-        self.context = context
-        self.sm = state_machine
-        self.om = order_manager
+        super().__init__(config, context, state_machine, order_manager)
         self.risk = margin_guard
         self.logger = logging.getLogger(__name__)
 
@@ -30,6 +28,11 @@ class CashAndCarryStrategy:
         # ⚠️ 注意：测试阶段金额较小
         self.order_amount = 10.0
         self.symbol = "ETH-USDT"
+
+    async def initialize(self):
+        """策略初始化"""
+        self.logger.info("初始化资金费率套利策略...")
+        self.is_initialized = True
 
     async def run_tick(self):
         """
@@ -83,3 +86,89 @@ class CashAndCarryStrategy:
                 # 🔥 修复：使用 await transition_to
                 if not self.sm.is_in_state(SystemState.ERROR):
                     await self.sm.transition_to(SystemState.IDLE, reason="Exec Done")
+
+    async def analyze_signal(self) -> dict:
+        """
+        【9】策略信号判断
+        - 检查资金费率是否为正
+        - 检查现货和合约价差
+        返回信号字典或 None
+        """
+        # 获取市场数据
+        market = self.context.market_data.get(self.symbol)
+        if not market:
+            return None
+
+        # 检查资金费率
+        if market.funding_rate <= 0:
+            return None  # 费率为负，不适合套利
+
+        # 检查价差
+        price_diff = market.futures_price - market.spot_price
+        price_diff_pct = price_diff / market.spot_price
+
+        # 如果价差太大，可能有大风险
+        if price_diff_pct > 0.05:  # 5%
+            return None
+
+        # 返回开仓信号
+        return {
+            "type": "carry",
+            "symbol": self.symbol,
+            "price": market.spot_price,
+            "size": self.order_amount / market.spot_price,
+            "funding_rate": market.funding_rate
+        }
+
+    async def execute(self, signal: dict, approval: dict) -> dict:
+        """
+        【12】执行交易
+        - 原子下单（现货买入 + 合约做空）
+        - 处理跛脚/撤单/补单
+        - 对冲检查
+        """
+        result = {
+            "success": False,
+            "error": "",
+            "position": None,
+            "order_id": ""
+        }
+
+        try:
+            # 计算数量
+            qty = round(self.order_amount / signal["price"], 3)
+
+            if qty < 0.001:
+                result["error"] = "下单数量太小"
+                return result
+
+            # 执行双腿套利
+            success = await self.om.execute_dual_leg(
+                spot_symbol=self.symbol,
+                spot_size=qty,
+                swap_symbol=f"{self.symbol}-SWAP",
+                swap_size=signal["size"]
+            )
+
+            result["success"] = success
+            if success:
+                result["position"] = {
+                    "symbol": self.symbol,
+                    "side": "carry",
+                    "spot_size": qty,
+                    "swap_size": signal["size"]
+                }
+            else:
+                result["error"] = "双腿下单失败"
+
+            return result
+
+        except Exception as e:
+            result["error"] = str(e)
+            self.logger.error(f"执行异常: {e}")
+            return result
+
+    async def shutdown(self):
+        """策略停止时的清理工作"""
+        self.logger.warning("🛑 资金费率套利策略停止...")
+        # TODO: 如果需要，可以在这里实现平仓逻辑

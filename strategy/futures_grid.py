@@ -140,5 +140,73 @@ class FuturesGridStrategy(BaseStrategy):
         # 可以在这里添加心跳日志
         # self.logger.debug("Grid strategy tick...")
 
+    async def analyze_signal(self) -> dict:
+        """
+        【9】策略信号判断
+        - 是否震荡（ADX<25）
+        - 是否情绪过度
+        - 是否满足统计优势
+        返回信号字典或 None
+        """
+        # 网格策略通常不需要主动信号，这里实现一个简单的版本
+        # 可以根据实际需求扩展
+
+        # 1. 检查是否有网格线被触发
+        # 这里简化处理，实际需要监听订单成交事件
+
+        # 2. 如果没有需要补单的网格，返回 None
+        # 网格策略通常是被动执行的
+
+        self.logger.debug("网格策略信号检查：无主动信号（网格策略为被动触发）")
+
+        return None
+
+    async def execute(self, signal: dict, approval: dict) -> dict:
+        """
+        【12】执行交易
+        - 原子下单（现货/合约）
+        - 处理跛脚/撤单/补单
+        - 对冲检查
+
+        返回执行结果
+        """
+        result = {
+            "success": False,
+            "error": "",
+            "position": None,
+            "order_id": ""
+        }
+
+        try:
+            # 网格策略通常是预挂单，这里可以实现补充网格的逻辑
+            # 例如：某个网格成交后，在对侧补单
+
+            # 示例：执行补充订单
+            if "side" in signal and "size" in signal:
+                success = await self.om.execute_dual_leg(
+                    spot_symbol=self.symbol.replace("-SWAP", ""),  # 现货
+                    spot_size=signal["size"],
+                    swap_symbol=self.symbol,  # 合约
+                    swap_size=signal["size"]
+                )
+
+                result["success"] = success
+                if success:
+                    result["position"] = {
+                        "symbol": self.symbol,
+                        "side": signal["side"],
+                        "size": signal["size"]
+                    }
+                else:
+                    result["error"] = "下单失败"
+
+            return result
+
+        except Exception as e:
+            result["error"] = str(e)
+            self.logger.error(f"执行异常: {e}")
+            return result
+
     async def shutdown(self):
         self.logger.warning("🛑 撤销所有网格挂单...")
+        # TODO: 实现撤销所有挂单的逻辑

@@ -10,6 +10,15 @@ class PositionManager:
         self.context = context
         self.logger = logging.getLogger(__name__)
 
+    async def sync_positions(self, context: Context):
+        """
+        同步仓位信息到 Context
+        从交易所拉取最新持仓
+        """
+        # 这里需要从交易所API获取持仓
+        # 暂时留空，需要在实际使用时实现
+        pass
+
     def check_hedge_integrity(self, symbol: str) -> bool:
         """
         检查对冲完整性

@@ -127,6 +127,9 @@ class Context:
 
         # 市场状态
         self.market_data: Dict[str, MarketData] = {}
+        self.market_snapshot: Dict[str, Any] = {}  # 多周期K线快照
+        self.liquidity_depth: float = 0.0  # 流动性深度
+        self.last_scan_time: float = 0.0  # 上次市场扫描时间
 
         # 系统状态
         self.metrics = SystemMetrics()
@@ -134,6 +137,10 @@ class Context:
         self.is_running: bool = False
         self.is_emergency: bool = False  # 紧急状态
         self.last_error: Optional[str] = None
+
+        # 交易状态
+        self.last_trade_time: float = 0.0  # 上次交易时间
+        self.trade_history: List[Dict[str, Any]] = []  # 交易历史记录
 
         # 配置缓存
         self._config_cache: Dict[str, Any] = {}
