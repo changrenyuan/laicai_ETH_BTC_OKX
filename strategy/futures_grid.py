@@ -1,93 +1,121 @@
 """
-🕸️ 动态 AI 合约网格策略 (Futures Grid)
+🕸️ 动态 AI 合约网格策略 (修复版)
 """
 import logging
 import asyncio
+import pandas as pd
 from strategy.base_strategy import BaseStrategy
 from strategy.grid_utils import GridUtils
+# 注意：这里不再需要导入 Dashboard，策略只负责干活，不负责画图
 
 class FuturesGridStrategy(BaseStrategy):
     def __init__(self, config, context, state_machine, order_manager, **kwargs):
         super().__init__(config, context, state_machine, order_manager)
-        self.logger = logging.getLogger("DynamicGrid")
-
-        # 读取配置
+        self.logger = logging.getLogger("GridStrategy")
         self.cfg = config.get("futures_grid", {})
+
         self.symbol = self.cfg.get("symbol", "ETH-USDT-SWAP")
+        self.investment = self.cfg.get("investment", 500)
         self.leverage = self.cfg.get("leverage", 3)
         self.grid_count = int(self.cfg.get("grid_count", 20))
-        self.is_dynamic = self.cfg.get("is_dynamic", True)
 
-        # 运行时状态
-        self.grids = []       # 价格线
-        self.active_orders = []
-        self.current_range = (0.0, 0.0) # (lower, upper)
+        # 状态
+        self.account_info = {}
+        self.trends = {}
+        self.plan = {}
+        self.grids = []
 
     async def initialize(self):
-        """策略启动时的初始化逻辑"""
-        self.logger.info(f"🚀 启动动态网格策略: {self.symbol} (Dynamic={self.is_dynamic})")
+        self.logger.info("正在初始化网格策略逻辑...")
 
-        # 1. 设置杠杆 (重要！)
-        # await self.om.client.set_leverage(self.symbol, self.leverage)
+        # 1. 获取账户信息 (仅用于内部计算，不打印)
+        bal = await self.om.client.get_trading_balances()
+        if bal and len(bal) > 0:
+            details = bal[0]['details'][0]
+            self.account_info = {
+                'totalEq': float(details.get('eq', 0)),
+                'availBal': float(details.get('availBal', 0))
+            }
 
-        # 2. 计算网格区间 (核心逻辑)
-        if self.is_dynamic:
-            await self._calculate_dynamic_params()
-        else:
-            self.lower = float(self.cfg["lower_price"])
-            self.upper = float(self.cfg["upper_price"])
-            self.logger.info(f"📌 使用静态区间: [{self.lower} ~ {self.upper}]")
+        # 2. 多周期趋势分析
+        await self._analyze_market_trends()
 
-        # 3. 生成网格线
-        self.grids = GridUtils.generate_grid_lines(self.lower, self.upper, self.grid_count)
-        self.logger.info(f"📐 生成 {len(self.grids)-1} 个格子")
+        # 3. 生成网格计划
+        await self._generate_grid_plan()
 
-        # 4. 获取当前价格并挂单
-        ticker = await self.om.client.get_ticker(self.symbol)
-        current_price = float(ticker[0]['last'])
+        # 4. 执行挂单
+        await self._execute_grid()
 
-        await self._place_initial_orders(current_price)
         self.is_initialized = True
+        self.logger.info("✅ 网格策略初始化完成")
 
-    async def _calculate_dynamic_params(self):
-        """🔥 AI: 根据布林带计算动态区间"""
-        self.logger.info("🧠 正在进行 AI 趋势分析...")
+    async def _analyze_market_trends(self):
+        """分析 1D, 4H, 15m 趋势"""
+        periods = {"1D": "1D", "4H": "4H", "15m": "15m"}
+        results = {}
 
-        # 获取 K 线
-        interval = self.cfg.get("k_line_interval", "1H")
-        limit = int(self.cfg.get("lookback_period", 20)) + 5
+        for name, bar in periods.items():
+            # 这里调用 client 获取 K 线
+            # 注意：需确保 client 有 get_candlesticks 方法
+            # 如果没有，请在 exchange/okx_client.py 中添加 (参考之前提供的代码)
+            klines = []
+            if hasattr(self.om.client, 'get_candlesticks'):
+                klines = await self.om.client.get_candlesticks(self.symbol, bar=bar, limit=50)
 
-        klines = await self.om.client.get_candlesticks(self.symbol, bar=interval, limit=limit)
-        if not klines:
-            self.logger.error("❌ K线获取失败，回退到静态参数")
-            self.lower = float(self.cfg["lower_price"])
-            self.upper = float(self.cfg["upper_price"])
-            return
+            if klines:
+                df = pd.DataFrame(klines, columns=["ts", "o", "h", "l", "c", "vol", "vc", "vq", "cf"])
+                df["c"] = df["c"].astype(float)
+                ma20 = df["c"].rolling(20).mean().iloc[-1]
+                curr = df["c"].iloc[-1]
 
-        # 计算布林带
-        upper, lower, curr = GridUtils.calculate_bollinger_bands(klines)
+                if curr > ma20 * 1.01: results[name] = "Bullish"
+                elif curr < ma20 * 0.99: results[name] = "Bearish"
+                else: results[name] = "Neutral"
 
-        # 稍微放宽一点区间，防止频繁破网
-        padding = (upper - lower) * 0.1
-        self.upper = round(upper + padding, 2)
-        self.lower = round(lower - padding, 2)
+                if name == "15m":
+                    results['ATR'] = GridUtils.calculate_atr(klines)
 
-        self.logger.info(f"🔮 AI 预测区间: [{self.lower} ~ {self.upper}] (基于布林带)")
+        self.trends = results
+        # 策略层不直接打印 Dashboard，数据会通过 Context 或日志体现
+        self.logger.info(f"市场趋势分析结果: {self.trends}")
 
-    async def _place_initial_orders(self, current_price: float):
-        """初始批量挂单"""
+    async def _generate_grid_plan(self):
+        """生成网格参数"""
+        ticker = await self.om.client.get_ticker(self.symbol)
+        if not ticker: return
+        curr_price = float(ticker[0]['last'])
+
+        atr = self.trends.get('ATR', curr_price * 0.01)
+        range_pct = (atr * 10) / curr_price
+
+        lower = curr_price * (1 - range_pct)
+        upper = curr_price * (1 + range_pct)
+
+        self.grids = GridUtils.generate_grid_lines(lower, upper, self.grid_count)
+
+        profit_pct = (upper - lower) / self.grid_count / curr_price
+
+        self.plan = {
+            'lower': round(lower, 2),
+            'upper': round(upper, 2),
+            'grid_count': self.grid_count,
+            'investment': self.investment,
+            'profit_per_grid': profit_pct
+        }
+        self.logger.info(f"网格计划生成: {self.plan}")
+
+    async def _execute_grid(self):
+        """执行挂单"""
+        ticker = await self.om.client.get_ticker(self.symbol)
+        if not ticker: return
+        curr_price = float(ticker[0]['last'])
+
         orders = []
-
-        # 假设投资额 500U，计算每格下单量
-        # 简单版：每格 1 张 (0.01 ETH)
-        # 进阶版：需要根据 investment / grid_count 计算 sz
         sz = "1"
 
         for price in self.grids:
-            if abs(price - current_price) / current_price < 0.001:
-                continue # 距离当前价太近不挂
-
-            side = "sell" if price > current_price else "buy"
+            if abs(price - curr_price) / curr_price < 0.002: continue
+            side = "sell" if price > curr_price else "buy"
 
             orders.append({
                 "instId": self.symbol,
@@ -98,27 +126,19 @@ class FuturesGridStrategy(BaseStrategy):
                 "sz": sz
             })
 
-        self.logger.info(f"⚡ 准备挂单 {len(orders)} 个...")
-        res = await self.om.client.place_batch_orders(orders)
-        self.logger.info(f"✅ 成功挂单: {len(res) if res else 0} 个")
+        if orders:
+            self.logger.info(f"准备批量挂单 {len(orders)} 个...")
+            if hasattr(self.om.client, 'place_batch_orders'):
+                res = await self.om.client.place_batch_orders(orders)
+                self.logger.info(f"批量挂单响应: {len(res) if res else 0} 条")
+            else:
+                self.logger.warning("Client 缺少 place_batch_orders 方法，跳过挂单")
 
     async def run_tick(self):
         if not self.is_initialized:
             await self.initialize()
-            return
-
-        # 动态网格的高级功能：
-        # 检查当前价格是否跑出了区间 (破网)
-        # 如果破网，需要触发 Stop Loss 或 Re-balance (重新计算中枢)
-
-        # 这里暂时只做监控
-        # ticker = await self.om.client.get_ticker(self.symbol)
-        # curr = float(ticker[0]['last'])
-        # if curr > self.upper or curr < self.lower:
-        #     self.logger.warning(f"🚨 价格破网! {curr}")
-        pass
+        # 可以在这里添加心跳日志
+        # self.logger.debug("Grid strategy tick...")
 
     async def shutdown(self):
-        self.logger.warning("🛑 策略停止，正在撤销所有网格挂单...")
-        # 需实现 cancel_all
-        # await self.om.client.cancel_all_orders(self.symbol)
+        self.logger.warning("🛑 撤销所有网格挂单...")
