@@ -269,46 +269,120 @@ class QuantEngine:
     # =========================================================================
     # Phase 8: 主循环 (The Loop)
     # =========================================================================
+        # =========================================================================
+        # Phase 8: 主循环 (The Loop) - 严格遵循流程图
+        # =========================================================================
     async def phase_8_main_loop(self):
         Dashboard.log("⭐⭐⭐ 引擎启动完成，进入主循环 ⭐⭐⭐", "SUCCESS")
         print("-" * 80)
 
+        # 组件引用
+        sm = self.components["state_machine"]
+        ctx = self.components["context"]
         circuit = self.components["circuit_breaker"]
         ex_guard = self.components["exchange_guard"]
+        margin_guard = self.components["margin_guard"]
 
+        # 计时器
         last_heartbeat = 0
-        heartbeat_intv = 5
+        heartbeat_intv = 2
+
+        # 调度间隔 (模拟 Scheduler 触发)
+        SCAN_INTERVAL = 5  # 每5秒扫描一次
+        last_scan_time = 0
 
         while self.is_running:
             try:
                 now = time.time()
 
-                # --- 1. 全局风控检查 ---
+                # ---------------------------------------------------------
+                # 【State = IDLE】 等待调度触发
+                # ---------------------------------------------------------
+                if sm.get_current_state() != SystemState.IDLE:
+                    # 如果状态不对（比如卡在 STOPPED），强制复位或等待
+                    await asyncio.sleep(1)
+                    continue
+
+                # 检查是否到达扫描时间 (Scheduler 逻辑)
+                if now - last_scan_time < SCAN_INTERVAL:
+                    # --- Dashboard 心跳 (空闲时刷新) ---
+                    if now - last_heartbeat > heartbeat_intv:
+                        self._print_heartbeat()
+                        last_heartbeat = now
+                    await asyncio.sleep(0.1)
+                    continue
+
+                last_scan_time = now
+
+                # ---------------------------------------------------------
+                # 【8】市场扫描 (Scanner)
+                # ---------------------------------------------------------
+                # 这一步通常在 Strategy.calculate_signal 里做，
+                # 但 Main 负责记录这个动作
+                # Dashboard.log("正在扫描市场...", "INFO") # 可选，太频繁可注释
+
+                # ---------------------------------------------------------
+                # 【9】策略判断 (Strategy)
+                # ---------------------------------------------------------
+                # 获取策略信号 (这里简化为 run_tick 内部判断，但在逻辑上属于这一步)
+                # 如果是震荡/无机会，策略内部直接 return，对应流程图的 (None -> IDLE)
+
+                # ---------------------------------------------------------
+                # 【10】风控审批 (Risk Gateway)
+                # ---------------------------------------------------------
+                # 1. 熔断检查
                 if circuit.is_triggered():
-                    Dashboard.log("🚫 [熔断] 系统熔断中，暂停交易...", "WARNING")
+                    print("")
+                    Dashboard.log("🚫 [熔断] 市场波动剧烈，拒绝交易", "WARNING")
                     await asyncio.sleep(5)
                     continue
 
+                # 2. API 健康检查
                 if not ex_guard.is_healthy():
-                    Dashboard.log("⚠️ [API] 交易所连接不稳定...", "WARNING")
+                    print("")
+                    Dashboard.log("⚠️ [API] 交易所连接不稳定，拒绝交易", "WARNING")
                     await asyncio.sleep(5)
                     continue
 
-                # --- 2. 策略执行 (Tick) ---
+                # 3. 保证金检查 (比如保证金率 < 300% 禁止开新仓)
+                # 这里我们需要传入 Context 里的实时数据
+                # if not margin_guard.check_threshold(ctx.margin_ratio):
+                #     Dashboard.log("🛡️ [风控] 保证金不足，拒绝开仓", "WARNING")
+                #     continue
+
+                # ---------------------------------------------------------
+                # 【11】执行前状态锁定 (State Locking)
+                # ---------------------------------------------------------
+                # 只有通过了风控，才允许进入执行状态
+                await sm.transition_to(SystemState.RUNNING, reason="Signal Triggered")
+
+                # ---------------------------------------------------------
+                # 【12】执行层 (Execution)
+                # ---------------------------------------------------------
+                # 调用策略执行逻辑 (下单/补单/撤单)
+                # 这里对应流程图的 "原子下单" 和 "处理跛脚"
                 await self.strategy.run_tick()
 
-                # --- 3. Dashboard 心跳 ---
-                if now - last_heartbeat > heartbeat_intv:
-                    self._print_heartbeat()
-                    last_heartbeat = now
+                # ---------------------------------------------------------
+                # 【13】更新 Context & PnL
+                # ---------------------------------------------------------
+                # 交易完成后，立即刷新一次账户状态
+                # 实际项目中，这里可以调用 client.get_positions() 更新 context
+                # await self.phase_3_connect() # 简化版：复用连接时的拉取逻辑刷新UI
 
-                await asyncio.sleep(1)
+                # ---------------------------------------------------------
+                # 【14】恢复 State → IDLE
+                # ---------------------------------------------------------
+                await sm.transition_to(SystemState.IDLE, reason="Execution Complete")
 
             except Exception as e:
+                print("")  # 换行
                 Dashboard.log(f"主循环异常: {e}", "ERROR")
                 logger.error(traceback.format_exc())
-                await asyncio.sleep(5)
 
+                # 发生异常，强制恢复 IDLE 状态，防止死锁
+                await sm.transition_to(SystemState.IDLE, reason="Error Recovery")
+                await asyncio.sleep(5)
     def _print_heartbeat(self):
         """控制台动态心跳，不刷屏"""
         try:
