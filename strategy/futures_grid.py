@@ -44,7 +44,7 @@ class FuturesGridStrategy(BaseStrategy):
         await self._generate_grid_plan()
 
         # 4. 执行挂单
-        await self._execute_grid()
+        # await self._execute_grid()
 
         self.is_initialized = True
         self.logger.info("✅ 网格策略初始化完成")
@@ -111,16 +111,26 @@ class FuturesGridStrategy(BaseStrategy):
         curr_price = float(ticker[0]['last'])
 
         orders = []
-        sz = "1"
+        sz = "1"  # 请确保该张数符合最小下单要求
 
         for price in self.grids:
             if abs(price - curr_price) / curr_price < 0.002: continue
-            side = "sell" if price > curr_price else "buy"
+
+            # 修复点：根据价格位置确定 side 和 posSide
+            # 价格高于现价：卖出开空 (side=sell, posSide=short)
+            # 价格低于现价：买入开多 (side=buy, posSide=long)
+            if price > curr_price:
+                side = "sell"
+                pos_side = "short"
+            else:
+                side = "buy"
+                pos_side = "long"
 
             orders.append({
                 "instId": self.symbol,
                 "tdMode": "cross",
                 "side": side,
+                "posSide": pos_side,  # 新增：显式指定仓位方向
                 "ordType": "limit",
                 "px": str(price),
                 "sz": sz
@@ -130,10 +140,10 @@ class FuturesGridStrategy(BaseStrategy):
             self.logger.info(f"准备批量挂单 {len(orders)} 个...")
             if hasattr(self.om.client, 'place_batch_orders'):
                 res = await self.om.client.place_batch_orders(orders)
+                # 日志会显示具体的下单结果
                 self.logger.info(f"批量挂单响应: {len(res) if res else 0} 条")
             else:
                 self.logger.warning("Client 缺少 place_batch_orders 方法，跳过挂单")
-
     async def run_tick(self):
         if not self.is_initialized:
             await self.initialize()

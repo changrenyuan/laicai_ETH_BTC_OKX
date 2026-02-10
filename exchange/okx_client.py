@@ -104,7 +104,14 @@ class OKXClient:
                     self.logger.error(f"API Business Error: {result}")
                     return None
 
-                return result.get("data")
+                # 针对批量接口的增强：如果 data 里的订单全是失败的，打印出来
+                data_list = result.get("data", [])
+                if endpoint == "/api/v5/trade/batch-orders":
+                    errors = [item for item in data_list if item.get("sCode") != "0"]
+                    if errors:
+                        self.logger.error(f"批量下单存在失败订单: {errors[0].get('sMsg')} 等")
+
+                return data_list
 
         except Exception as e:
             self.logger.error(f"Request failed: {e}")
@@ -219,3 +226,9 @@ class OKXClient:
         return await self._request("GET", "/api/v5/market/candles", params=params)
 
     # ... (保留 batch_orders 等其他接口) ...
+    async def get_pending_orders(self, inst_id: str = None):
+        """查询当前未成交挂单"""
+        params = {}
+        if inst_id:
+            params["instId"] = inst_id
+        return await self._request("GET", "/api/v5/trade/orders-pending", params=params)
