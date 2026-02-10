@@ -1,26 +1,24 @@
 """
-🚀 Laicai Funding Engine (Main Entry)
-=====================================
-全自动量化交易引擎总入口
-负责系统的生命周期管理、组件装配与异常兜底。
+🚀 LAICAI FUNDING ENGINE (MAIN ORCHESTRATOR)
+============================================
+全自动量化交易系统总入口
+遵循 "Titan" 架构设计：只负责生命周期管理，不包含任何业务逻辑。
 
-[职责边界]
-✅ 启动前自检 (Bootstrap)
-✅ 加载配置 (Config Loader)
-✅ 初始化交易所 (Exchange Init)
-✅ 构建上下文 (Context Builder)
-✅ 装配策略与风控 (Assembly)
-✅ 启动调度与状态机 (Launch)
-✅ 兜底安全退出 (Graceful Shutdown)
-
-❌ 绝不包含策略逻辑
-❌ 绝不包含风控细节
-❌ 绝不直接操作下单
+[流程映射]
+Phase 1: Bootstrap (自检)
+Phase 2: Config & Init (加载)
+Phase 3: Connection (连接)
+Phase 4: Context Build (构建)
+Phase 5: Assembly (装配)
+Phase 6: Scheduler (调度)
+Phase 7: StateMachine (启动)
+Phase 8: Main Loop (循环)
 """
 
 import asyncio
 import sys
 import signal
+import time
 import logging
 import traceback
 from pathlib import Path
@@ -35,7 +33,7 @@ sys.path.insert(0, str(ROOT_DIR))
 load_dotenv()
 
 # -----------------------------------------------------------------------------
-# 2. 模块导入 (按层级)
+# 2. 模块导入 (严格按层级)
 # -----------------------------------------------------------------------------
 # Core (内核)
 from core.context import Context
@@ -61,87 +59,123 @@ from execution.position_manager import PositionManager
 from monitor.pnl_tracker import PnLTracker
 from monitor.dashboard import Dashboard
 
-# Strategy Factory (策略工厂)
+# Strategy (策略工厂)
 from strategy import StrategyFactory
 
-# Scripts (运维工具)
-from scripts.bootstrap import BootstrapChecker
+# Scripts (运维)
+from scripts.bootstrap import run_bootstrap_checks
 
 # -----------------------------------------------------------------------------
-# 3. 日志配置 (Log Redirect)
+# 3. 日志配置 (Log Redirect - 保持控制台干净)
 # -----------------------------------------------------------------------------
 LOG_DIR = ROOT_DIR / "data" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# 🔥 修复部分：正确设置 Handler 和 Level
+runtime_handler = logging.FileHandler(LOG_DIR / "runtime.log", encoding='utf-8')
+runtime_handler.setLevel(logging.INFO)
+
+error_handler = logging.FileHandler(LOG_DIR / "error.log", encoding='utf-8')
+error_handler.setLevel(logging.ERROR)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_DIR / "runtime.log", encoding='utf-8'),
-        # logging.FileHandler(LOG_DIR / "error.log", level=logging.ERROR, encoding='utf-8')
-    ]
+    handlers=[runtime_handler, error_handler]
 )
-# 屏蔽控制台噪音
+
+# 强行压制第三方库噪音
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-logger = logging.getLogger("Main")
+logger = logging.getLogger("Orchestrator")
 
 
 class QuantEngine:
     """
-    量化引擎主类
-    负责组装各个零部件，并按顺序启动系统
+    量化引擎指挥官
+    职责：组装组件 -> 建立连接 -> 启动循环 -> 安全退出
     """
     def __init__(self):
         self.is_running = True
         self.config = {}
-        self.components = {}
-        self.strategy_instance = None
+        self.components = {}  # 组件容器
+        self.strategy = None  # 当前激活的策略实例
 
-        # 注册信号处理 (Ctrl+C / Kill)
+        # 信号注册
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _signal_handler(self, sig, frame):
-        Dashboard.log("接收到终止信号，准备安全退出...", "WARNING")
+        Dashboard.log("接收到系统中断信号 (SIGINT/SIGTERM)...", "WARNING")
         self.is_running = False
 
-    async def _load_configurations(self):
-        """步骤 2: 加载配置"""
-        Dashboard.log("正在加载配置文件...", "INFO")
+    # =========================================================================
+    # Phase 1: 启动前自检
+    # =========================================================================
+    def phase_1_bootstrap(self):
+        Dashboard.print_banner()
+        Dashboard.log("【1】启动前自检 (Bootstrap)...", "INFO")
+
+        try:
+            if not run_bootstrap_checks(ROOT_DIR):
+                Dashboard.log("自检未通过，禁止启动。", "ERROR")
+                sys.exit(1)
+        except ImportError:
+            pass
+
+        Dashboard.log("环境自检通过。", "SUCCESS")
+
+    # =========================================================================
+    # Phase 2: 加载配置 & 初始化组件
+    # =========================================================================
+    def phase_2_load_config(self):
+        Dashboard.log("【2】加载配置 & 初始化组件...", "INFO")
         try:
             cfg_path = ROOT_DIR / "config"
             with open(cfg_path / "account.yaml", "r", encoding="utf-8") as f: ac = yaml.safe_load(f)
             with open(cfg_path / "risk.yaml", "r", encoding="utf-8") as f: ri = yaml.safe_load(f)
             with open(cfg_path / "strategy.yaml", "r", encoding="utf-8") as f: st = yaml.safe_load(f)
 
-            # 合并为一个大字典
             self.config = {**ac, **ri, **st}
-
-            # 激活策略检查
-            active_strat = self.config.get("active_strategy", "UNKNOWN")
-            Dashboard.log(f"配置加载完成 | 激活策略: [{active_strat.upper()}]", "SUCCESS")
-
+            Dashboard.log(f"配置加载完成 | 激活策略: [{self.config.get('active_strategy', 'N/A').upper()}]", "SUCCESS")
         except Exception as e:
-            Dashboard.log(f"配置文件加载失败: {e}", "ERROR")
+            Dashboard.log(f"配置文件解析失败: {e}", "ERROR")
             raise e
 
-    async def _init_exchange(self):
-        """步骤 3: 初始化交易所"""
-        Dashboard.log("正在连接 OKX 交易所...", "INFO")
-        sub_account = self.config.get("sub_account", "")
-        client = OKXClient(sub_account)
+    # =========================================================================
+    # Phase 3: 连接交易所 & 初始状态拉取
+    # =========================================================================
+    async def phase_3_connect(self):
+        Dashboard.log("【3】连接交易所 & 拉取初始状态...", "INFO")
 
-        is_connected = await client.connect()
-        if not is_connected:
-            raise ConnectionError("无法连接到 OKX API，请检查网络或配置")
+        # 1. 初始化客户端
+        client = OKXClient(self.config.get("sub_account"))
+        connected = await client.connect()
+        if not connected:
+            raise ConnectionError("无法连接到 OKX API")
 
         self.components["client"] = client
-        Dashboard.log("交易所 API 连接建立", "SUCCESS")
+        Dashboard.log("交易所 API 连接建立。", "SUCCESS")
 
-    async def _build_context(self):
-        """步骤 4: 构建 Context 与 Core"""
-        Dashboard.log("正在构建系统内核...", "INFO")
+        # 2. 拉取账户初始快照 (用于 Dashboard 展示)
+        bal = await client.get_trading_balances()
+        if bal and len(bal) > 0:
+            details = bal[0]['details'][0]
+            info = {
+                'totalEq': details.get('eq', 0),
+                'availBal': details.get('availBal', 0),
+                'upl': details.get('upl', 0),
+                'mgnRatio': details.get('mgnRatio', 'N/A')
+            }
+            Dashboard.print_account_overview(info)
+        else:
+            Dashboard.log("无法获取账户余额，请检查 API 权限。", "WARNING")
+
+    # =========================================================================
+    # Phase 4: 构建 Context (系统快照)
+    # =========================================================================
+    def phase_4_build_context(self):
+        Dashboard.log("【4】构建 Context (系统快照)...", "INFO")
 
         event_bus = EventBus()
         state_machine = StateMachine(event_bus)
@@ -151,9 +185,11 @@ class QuantEngine:
         self.components["state_machine"] = state_machine
         self.components["context"] = context
 
-    async def _assemble_modules(self):
-        """步骤 5: 装配策略 + 风控 + 执行"""
-        Dashboard.log("正在装配策略与风控组件...", "INFO")
+    # =========================================================================
+    # Phase 5: 注册策略 & 风控模块 (装配)
+    # =========================================================================
+    async def phase_5_assembly(self):
+        Dashboard.log("【5】注册策略 & 风控模块...", "INFO")
 
         cfg = self.config
         client = self.components["client"]
@@ -161,7 +197,13 @@ class QuantEngine:
         sm = self.components["state_machine"]
         bus = self.components["event_bus"]
 
-        # 5.1 风控层 (Risk Layer)
+        # 1. 组装执行层
+        order_manager = OrderManager(client, sm, bus)
+        position_manager = PositionManager(ctx)
+        self.components["order_manager"] = order_manager
+        self.components["position_manager"] = position_manager
+
+        # 2. 组装风控层 (RiskManager)
         margin_guard = MarginGuard(cfg)
         fund_guard = FundGuard(cfg, client)
         circuit_breaker = CircuitBreaker(cfg)
@@ -176,145 +218,150 @@ class QuantEngine:
             "liquidity_guard": liquidity_guard
         })
 
-        # 5.2 执行层 (Execution Layer)
-        order_manager = OrderManager(client, sm, bus)
-        position_manager = PositionManager(ctx)
-
-        self.components["order_manager"] = order_manager
-        self.components["position_manager"] = position_manager
-
-        # 5.3 监控层 (Monitor Layer)
-        pnl_tracker = PnLTracker(cfg)
-        self.components["pnl_tracker"] = pnl_tracker
-
-        # 5.4 策略层 (Strategy Layer) - 核心装配
-        # 将风控和执行组件注入策略，但 main.py 不关心策略具体逻辑
-        active_name = cfg.get("active_strategy", "futures_grid")
-
+        # 3. 组装策略层 (StrategyManager)
+        active_strat = cfg.get("active_strategy", "futures_grid")
         try:
             strategy = StrategyFactory(
-                strategy_name=active_name,
+                strategy_name=active_strat,
                 config=cfg,
                 context=ctx,
                 state_machine=sm,
                 order_manager=order_manager,
-                # 注入额外依赖
                 margin_guard=margin_guard,
                 fund_guard=fund_guard
             )
-            # 策略初始化 (计算网格/预挂单/自检)
+            # 策略初始化 (盘前分析、K线拉取、计划生成)
             await strategy.initialize()
-            self.strategy_instance = strategy
-            Dashboard.log(f"策略 [{active_name}] 装配并初始化成功", "SUCCESS")
-
+            self.strategy = strategy
+            Dashboard.log(f"策略 [{active_strat}] 装配完毕。", "SUCCESS")
         except Exception as e:
             logger.error(traceback.format_exc())
             raise RuntimeError(f"策略装配失败: {e}")
 
-    async def _start_scheduler(self):
-        """步骤 6: 启动调度器"""
-        Dashboard.log("正在启动自动化调度器...", "INFO")
+    # =========================================================================
+    # Phase 6: 启动 Scheduler (调度器)
+    # =========================================================================
+    async def phase_6_scheduler(self):
+        Dashboard.log("【6】启动 Scheduler (调度器)...", "INFO")
+
+        pnl_tracker = PnLTracker(self.config)
+        self.components["pnl_tracker"] = pnl_tracker
 
         scheduler = Scheduler(
             context=self.components["context"],
             fund_guard=self.components["fund_guard"],
-            pnl_tracker=self.components["pnl_tracker"],
+            pnl_tracker=pnl_tracker,
             position_manager=self.components["position_manager"]
         )
 
         await scheduler.start()
         self.components["scheduler"] = scheduler
 
-    async def _start_state_machine(self):
-        """步骤 7: 启动状态机"""
+    # =========================================================================
+    # Phase 7: 进入 StateMachine 主循环
+    # =========================================================================
+    async def phase_7_start_machine(self):
+        Dashboard.log("【7】启动状态机...", "INFO")
         sm = self.components["state_machine"]
         if sm.get_current_state() != SystemState.IDLE:
-            await sm.transition_to(SystemState.IDLE, reason="Engine Launch")
-        Dashboard.log("状态机已就绪 (IDLE)", "SUCCESS")
+            await sm.transition_to(SystemState.IDLE, reason="Engine Start")
 
-    async def run(self):
-        """
-        [主入口] 全流程编排
-        """
-        Dashboard.print_banner()
+    # =========================================================================
+    # Phase 8: 主循环 (The Loop)
+    # =========================================================================
+    async def phase_8_main_loop(self):
+        Dashboard.log("⭐⭐⭐ 引擎启动完成，进入主循环 ⭐⭐⭐", "SUCCESS")
+        print("-" * 80)
 
-        try:
-            # Step 1: 启动前自检 (调用 scripts/bootstrap.py)
-            Dashboard.log("执行 Phase 1: 启动前自检...", "INFO")
-            if not BootstrapChecker():
-                Dashboard.log("自检失败，禁止启动", "ERROR")
-                return
+        circuit = self.components["circuit_breaker"]
+        ex_guard = self.components["exchange_guard"]
 
-            # Step 2-7: 初始化流程
-            await self._load_configurations()
-            await self._init_exchange()
-            await self._build_context()
-            await self._assemble_modules()
-            await self._start_scheduler()
-            await self._start_state_machine()
+        last_heartbeat = 0
+        heartbeat_intv = 5
 
-            Dashboard.log("⭐⭐⭐ 引擎启动完成，进入主循环 ⭐⭐⭐", "SUCCESS")
-            print("-" * 80)
+        while self.is_running:
+            try:
+                now = time.time()
 
-            # Step 8: 主循环 (The Loop)
-            # main.py 只负责维持心跳和顶层异常捕获，不处理业务逻辑
-            circuit = self.components["circuit_breaker"]
-            ex_guard = self.components["exchange_guard"]
-
-            while self.is_running:
-                # 8.1 全局熔断检查
+                # --- 1. 全局风控检查 ---
                 if circuit.is_triggered():
-                    Dashboard.log("🚫 系统熔断中，暂停策略...", "WARNING")
+                    Dashboard.log("🚫 [熔断] 系统熔断中，暂停交易...", "WARNING")
                     await asyncio.sleep(5)
                     continue
 
-                # 8.2 API 健康检查
                 if not ex_guard.is_healthy():
-                    Dashboard.log("⚠️ 交易所 API 异常，暂停策略...", "WARNING")
+                    Dashboard.log("⚠️ [API] 交易所连接不稳定...", "WARNING")
                     await asyncio.sleep(5)
                     continue
 
-                # 8.3 驱动策略 (Tick)
-                # 所有的行情判断、下单、对冲都在 strategy.run_tick() 内部闭环
-                await self.strategy_instance.run_tick()
+                # --- 2. 策略执行 (Tick) ---
+                await self.strategy.run_tick()
 
-                # 8.4 释放 CPU
+                # --- 3. Dashboard 心跳 ---
+                if now - last_heartbeat > heartbeat_intv:
+                    self._print_heartbeat()
+                    last_heartbeat = now
+
                 await asyncio.sleep(1)
 
-        except Exception as e:
-            Dashboard.log(f"引擎发生致命崩溃: {e}", "ERROR")
-            logger.critical(traceback.format_exc())
-        finally:
-            await self.shutdown()
+            except Exception as e:
+                Dashboard.log(f"主循环异常: {e}", "ERROR")
+                logger.error(traceback.format_exc())
+                await asyncio.sleep(5)
 
+    def _print_heartbeat(self):
+        """控制台动态心跳，不刷屏"""
+        try:
+            # 尝试获取策略关注的 Symbol
+            sym = getattr(self.strategy, 'symbol', 'UNKNOWN')
+            # 这里简单打印，实际可扩展为刷新价格
+            pass
+        except:
+            pass
+
+    # =========================================================================
+    # Shutdown: 安全退出
+    # =========================================================================
     async def shutdown(self):
-        """
-        [兜底] 安全退出流程
-        """
-        print("")
+        print("") # 换行
         Dashboard.log("正在执行安全退出程序...", "WARNING")
 
-        # 1. 停止调度器
         if "scheduler" in self.components:
             await self.components["scheduler"].stop()
 
-        # 2. 策略层清理 (撤单/持久化)
-        if self.strategy_instance:
+        if self.strategy:
             try:
-                await self.strategy_instance.shutdown()
+                await self.strategy.shutdown()
             except Exception as e:
                 logger.error(f"策略清理异常: {e}")
 
-        # 3. 断开连接
         if "client" in self.components:
             await self.components["client"].disconnect()
 
         Dashboard.log("系统已安全关闭，数据已归档。", "SUCCESS")
         sys.exit(0)
 
+    # =========================================================================
+    # Run: 编排入口
+    # =========================================================================
+    async def run(self):
+        try:
+            self.phase_1_bootstrap()
+            self.phase_2_load_config()
+            await self.phase_3_connect()
+            self.phase_4_build_context()
+            await self.phase_5_assembly()
+            await self.phase_6_scheduler()
+            await self.phase_7_start_machine()
+            await self.phase_8_main_loop()
+        except Exception as e:
+            Dashboard.log(f"引擎启动中断: {e}", "ERROR")
+            logger.critical(traceback.format_exc())
+        finally:
+            await self.shutdown()
+
 
 if __name__ == "__main__":
-    # 针对 Windows 的 EventLoop 策略调整
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -322,5 +369,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(engine.run())
     except KeyboardInterrupt:
-        # 这一步通常被 signal handler 捕获，但保留以此兜底
         pass

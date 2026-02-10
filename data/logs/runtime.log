@@ -177,3 +177,14 @@ RuntimeError: 策略装配失败: type object 'Dashboard' has no attribute 'prin
 2026-02-10 10:34:23,040 - core.scheduler - INFO - 📅 [Daily] Generating report...
 2026-02-10 10:34:59,367 - core.scheduler - INFO - ⏰ 调度器已停止
 2026-02-10 10:34:59,367 - GridStrategy - WARNING - 🛑 撤销所有网格挂单...
+2026-02-10 10:47:45,108 - exchange.okx_client - INFO - Using Proxy: http://127.0.0.1:7897
+2026-02-10 10:47:45,924 - Orchestrator - CRITICAL - Traceback (most recent call last):
+  File "D:\git\laicai_ETH_BTC_OKX\main_auto.py", line 351, in run
+    await self.phase_3_connect()
+  File "D:\git\laicai_ETH_BTC_OKX\main_auto.py", line 170, in phase_3_connect
+    Dashboard.print_account_overview(info)
+  File "D:\git\laicai_ETH_BTC_OKX\monitor\dashboard.py", line 64, in print_account_overview
+    mgn_color = Colors.GREEN if float(mgn_ratio) > 300 or mgn_ratio == '' else Colors.RED
+                                ^^^^^^^^^^^^^^^^
+ValueError: could not convert string to float: ''
+
