@@ -11,10 +11,10 @@ sub_account:
 
 # 资金分配配置
 capital_allocation:
-  total_capital: 10  # 总资金（USDT）
-  spot_ratio: 0.5  # 现货比例 50%
-  futures_ratio: 0.5  # 合约比例 50%
-  reserve_ratio: 0.1  # 预留资金比例 10%（用于追加保证金）
+  total_capital: 40  # 总资金（USDT）
+  spot_ratio: 0.0  # 现货比例 0%（纯合约）
+  futures_ratio: 1.0  # 合约比例 100%
+  reserve_ratio: 0.2  # 预留资金比例 20%（用于追加保证金）
 
 # 风险限额
 risk_limits:

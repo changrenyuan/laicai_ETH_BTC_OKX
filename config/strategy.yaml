@@ -7,7 +7,9 @@
 # 选项:
 #   "futures_grid"   - 合约网格 (当前市场贴水/震荡时使用)
 #   "cash_and_carry" - 资金费率套利 (牛市/正溢价时使用)
-active_strategy: "trend_strategy"
+#   "trend_strategy" - 单币种趋势滚仓策略
+#   "multi_trend"    - 多币种趋势策略（推荐小资金使用）
+active_strategy: "multi_trend"
 
 strategy:
   enabled: true
@@ -18,11 +20,16 @@ strategy:
 # ==========================================
 market_scan:
   enabled: true               # 是否开启市场扫描
-  top_n: 10                    # 返回前 N 个候选品种
-  min_volume_24h: 50000000    # 最小 24h 成交额 (1000 万 USDT)
+  top_n: 5                    # 返回前 5 个候选品种（趋势合约）
+  min_volume_24h: 50000000    # 最小 24h 成交额 (5000 万 USDT)
   min_price_change: 1.0       # 最小涨跌幅 1%
   max_price_change: 20.0      # 最大涨跌幅 20%
-  scan_interval: 120           # 扫描间隔（秒）
+  scan_interval: 300          # 扫描间隔（秒）- 5分钟
+
+  # 趋势筛选配置（用于筛选趋势合约）
+  trend_only: true            # 只选择趋势环境的合约
+  min_adx: 25                 # 最小ADX（趋势强度）
+  min_atr_expansion: 1.2      # 最小ATR扩张（波动率）
 
 # ==========================================
 # 🌊 市场环境检测配置 (Regime Detector)
@@ -72,8 +79,39 @@ futures_grid:
   stop_loss_pct: 0.10      # 跌破网格下限 10% 止损
 
 # ==========================================
-# 💰 策略 B: 资金费率套利 (Cash & Carry) - 原有
+# 📊 策略 C: 多币种趋势滚仓（适合小资金）
 # ==========================================
+multi_trend:
+  # 资金配置
+  total_capital: 40        # 总资金 40U
+  max_positions: 5         # 最多5个持仓
+  leverage: 3              # 3倍杠杆
+
+  # 风险配置
+  risk_per_position: 0.02  # 每个仓位风险 2%
+  stop_loss_pct: 0.02      # 止损 2%
+  take_profit_pct: 0.06    # 止盈 6%
+
+  # 评估配置
+  evaluation_interval: 15  # 评估间隔（分钟）
+  min_profit_threshold: 0.01  # 最小盈利 1%
+
+  # 趋势识别配置
+  adx_threshold: 25        # ADX 阈值
+  trend_period: "4H"       # 趋势周期（4小时）
+
+  # 候选交易对列表
+  candidates:
+    - "BTC-USDT-SWAP"
+    - "ETH-USDT-SWAP"
+    - "SOL-USDT-SWAP"
+    - "DOGE-USDT-SWAP"
+    - "PEPE-USDT-SWAP"
+    - "HYPE-USDT-SWAP"
+    - "WIF-USDT-SWAP"
+    - "BONK-USDT-SWAP"
+    - "FLOKI-USDT-SWAP"
+
 cash_and_carry:
   # 开仓条件 (Spread > 0.1% 且 费率 > 0.01%)
   open_conditions:

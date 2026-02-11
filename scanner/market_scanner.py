@@ -75,6 +75,9 @@ class MarketScanner:
                 - min_volume_24h: 最小 24h 成交额
                 - min_price_change: 最小涨跌幅
                 - max_price_change: 最大涨跌幅
+                - trend_only: 是否只选择趋势环境合约
+                - min_adx: 最小ADX（趋势强度）
+                - min_atr_expansion: 最小ATR扩张
             regime_detector: 市场环境检测器实例
         """
         self.client = client
@@ -86,6 +89,11 @@ class MarketScanner:
         self.min_volume_24h = config.get("min_volume_24h", 10000000)  # 1000 万 USDT
         self.min_price_change = config.get("min_price_change", 1.0)  # 1%
         self.max_price_change = config.get("max_price_change", 20.0)  # 20%
+
+        # 趋势筛选配置
+        self.trend_only = config.get("trend_only", False)
+        self.min_adx = config.get("min_adx", 25)
+        self.min_atr_expansion = config.get("min_atr_expansion", 1.2)
 
         self.logger = logging.getLogger(__name__)
 
@@ -289,6 +297,20 @@ class MarketScanner:
                     regime_analysis = self.regime_detector.analyze(symbol, klines)
                     if not regime_analysis:
                         return None
+
+                    # 趋势筛选：如果配置了trend_only，只保留TREND环境的合约
+                    if self.trend_only:
+                        if regime_analysis.regime != "TREND":
+                            self.logger.info(f"🔍 [趋势筛选] {symbol} 市场环境为 {regime_analysis.regime}，跳过")
+                            return None
+                        # 检查ADX是否达标
+                        if regime_analysis.adx < self.min_adx:
+                            self.logger.info(f"🔍 [趋势筛选] {symbol} ADX={regime_analysis.adx:.1f} < {self.min_adx}，跳过")
+                            return None
+                        # 检查ATR扩张是否达标
+                        if regime_analysis.atr_expansion < self.min_atr_expansion:
+                            self.logger.info(f"🔍 [趋势筛选] {symbol} ATR扩张={regime_analysis.atr_expansion:.2f} < {self.min_atr_expansion}，跳过")
+                            return None
 
                     # 计算分数
                     score = self._calculate_score(ticker, regime_analysis)

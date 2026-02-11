@@ -224,20 +224,60 @@ class Runtime:
         【10】策略判断 (Strategy)
         - 根据市场环境生成策略信号
         - 返回信号列表
+
+        注意：这里支持多策略模式：
+        1. 如果是multi_trend策略，遍历所有扫描结果生成信号
+        2. 其他策略保持原有逻辑
         """
         try:
             signals = []
-            scan_results = await self._market_scan()
-            for candidate in scan_results:
-                symbol = candidate.symbol
-                regime = candidate.regime
-                # 调用策略的 analyze_signal 方法
-                signal = await self.strategy_manager.generate(symbol, regime)
 
-                if signal:
-                    signals.append(signal)
-                    self.context.add_strategy_signal(signal)
-                    Dashboard.log(f"🎯 [Strategy] 检测到交易信号: {signal.get('reason', '')}", "INFO")
+            # 获取当前活动策略
+            active_strategy = self.config.get("active_strategy", "")
+
+            # 执行市场扫描
+            scan_results = await self._market_scan()
+
+            if not scan_results:
+                return signals
+
+            # 如果是multi_trend策略，遍历所有扫描结果生成信号
+            if active_strategy == "multi_trend":
+                # 获取策略实例
+                multi_trend_strategy = self.strategy
+
+                # 遍历所有扫描结果
+                for candidate in scan_results:
+                    symbol = candidate.symbol
+                    regime = candidate.regime
+
+                    # 只处理TREND环境
+                    if regime != "TREND":
+                        continue
+
+                    # 调用MultiTrendStrategy的generate_trend_signal方法
+                    signal = await multi_trend_strategy.generate_trend_signal(symbol)
+
+                    if signal:
+                        # 注入regime信息
+                        signal['regime'] = regime
+                        signal['strategy'] = 'multi_trend'
+                        signals.append(signal)
+                        self.context.add_strategy_signal(signal)
+                        Dashboard.log(f"🎯 [Strategy] 检测到交易信号: {symbol} {signal.get('side')} {signal.get('reason', '')}", "INFO")
+
+            else:
+                # 其他策略保持原有逻辑
+                for candidate in scan_results:
+                    symbol = candidate.symbol
+                    regime = candidate.regime
+                    # 调用策略的 analyze_signal 方法
+                    signal = await self.strategy_manager.generate(symbol, regime)
+
+                    if signal:
+                        signals.append(signal)
+                        self.context.add_strategy_signal(signal)
+                        Dashboard.log(f"🎯 [Strategy] 检测到交易信号: {signal.get('reason', '')}", "INFO")
 
             return signals
 

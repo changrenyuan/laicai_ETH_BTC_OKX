@@ -19,6 +19,7 @@ from risk.fund_guard import FundGuard
 from risk.circuit_breaker import CircuitBreaker
 from risk.exchange_guard import ExchangeGuard
 from risk.liquidity_guard import LiquidityGuard
+from risk.risk_manager import RiskManager
 
 from monitor.pnl_tracker import PnLTracker
 
@@ -37,22 +38,22 @@ logger = logging.getLogger("Orchestrator")
 
 class Register:
     """Register 生命周期阶段 - 注册模块"""
-    
+
     def __init__(self, config: Dict, components: Dict):
         self.config = config
         self.components = components
         self.strategy = None
-    
+
     async def run(self):
         """注册所有模块"""
         Dashboard.log("【5】注册策略 & 风控模块...", "INFO")
-        
+
         cfg = self.config
         client = self.components["client"]
         ctx = self.components["context"]
         sm = self.components["state_machine"]
         bus = self.components["event_bus"]
-        
+
         # 0. 同步账户余额到 Context
         bal = await client.get_trading_balances()
         if bal and len(bal) > 0:
@@ -68,7 +69,7 @@ class Register:
                     total=avail + frozen
                 )
             Dashboard.log(f"✅ 已同步 {len(ctx.balances)} 种货币余额", "SUCCESS")
-        
+
         # 1. 组装执行层
         order_manager = OrderManager(client, sm, bus)
         position_manager = PositionManager(ctx)
@@ -78,14 +79,14 @@ class Register:
         # 1.5 组装市场数据层
         market_data_fetcher = MarketDataFetcher(client, cfg)
         self.components["market_data_fetcher"] = market_data_fetcher
-        
+
         # 2. 组装风控层
         margin_guard = MarginGuard(cfg)
         fund_guard = FundGuard(cfg, client)
         circuit_breaker = CircuitBreaker(cfg)
         exchange_guard = ExchangeGuard(cfg)
         liquidity_guard = LiquidityGuard(cfg)
-        
+
         self.components.update({
             "margin_guard": margin_guard,
             "fund_guard": fund_guard,
@@ -93,7 +94,19 @@ class Register:
             "exchange_guard": exchange_guard,
             "liquidity_guard": liquidity_guard
         })
-        
+
+        # 2.5 组装 RiskManager（统一风控入口）
+        risk_manager = RiskManager(
+            config=cfg,
+            margin_guard=margin_guard,
+            fund_guard=fund_guard,
+            liquidity_guard=liquidity_guard,
+            circuit_breaker=circuit_breaker,
+            exchange_guard=exchange_guard
+        )
+        self.components["risk_manager"] = risk_manager
+        Dashboard.log("✅ RiskManager 注册成功", "SUCCESS")
+
         # 3. 组装策略层
         active_strat = cfg.get("active_strategy", "futures_grid")
         try:
@@ -109,6 +122,13 @@ class Register:
             await strategy.initialize()
             self.strategy = strategy
             Dashboard.log(f"策略 [{active_strat}] 装配完毕。", "SUCCESS")
+
+            # 如果是multi_trend策略，需要将策略实例传递给Scheduler
+            if active_strat == "multi_trend":
+                # 暂时存储，后续在SchedulerLifecycle中设置
+                self.components["multi_trend_strategy"] = strategy
+                Dashboard.log("✅ MultiTrendStrategy 已准备好注册到Scheduler", "SUCCESS")
+
         except Exception as e:
             logger.error(traceback.format_exc())
             raise RuntimeError(f"策略装配失败: {e}")
