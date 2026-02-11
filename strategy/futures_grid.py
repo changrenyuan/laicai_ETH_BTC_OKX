@@ -218,5 +218,19 @@ class FuturesGridStrategy(BaseStrategy):
             return result
 
     async def shutdown(self):
+        """策略停止时的清理工作（撤销所有挂单）"""
         self.logger.warning("🛑 撤销所有网格挂单...")
-        # TODO: 实现撤销所有挂单的逻辑
+
+        try:
+            # 撤销所有未成交的订单
+            if hasattr(self.om.client, 'cancel_all_orders'):
+                result = await self.om.client.cancel_all_orders(self.symbol)
+                if result:
+                    self.logger.info(f"✅ 已撤销 {len(result)} 个挂单")
+            else:
+                self.logger.warning("Client 缺少 cancel_all_orders 方法，无法撤销挂单")
+
+        except Exception as e:
+            self.logger.error(f"撤销挂单失败: {e}")
+
+        self.is_initialized = False

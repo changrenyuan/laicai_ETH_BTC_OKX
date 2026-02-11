@@ -63,12 +63,13 @@ class MarketScanner:
     3️⃣ 输出候选列表（包含市场环境）
     """
 
-    def __init__(self, client, config: Dict, regime_detector):
+    def __init__(self, client, market_data_fetcher, config: Dict, regime_detector):
         """
         初始化市场扫描器
 
         Args:
-            client: OKX 客户端实例
+            client: OKX 客户端实例（用于获取 K 线数据）
+            market_data_fetcher: MarketDataFetcher 实例（用于获取 ticker 数据）
             config: 配置字典，包含：
                 - top_n: 返回前 N 个候选
                 - min_volume_24h: 最小 24h 成交额
@@ -77,6 +78,7 @@ class MarketScanner:
             regime_detector: 市场环境检测器实例
         """
         self.client = client
+        self.market_data_fetcher = market_data_fetcher
         self.config = config
         self.regime_detector = regime_detector
 
@@ -174,7 +176,7 @@ class MarketScanner:
 
     async def _fetch_tickers(self, instruments: List[str]) -> List[Dict]:
         """
-        获取所有品种的 Ticker 数据
+        获取所有品种的 Ticker 数据（使用 market_data_fetcher）
 
         Args:
             instruments: 交易对列表
@@ -183,22 +185,11 @@ class MarketScanner:
             List[Dict]: Ticker 数据列表
         """
         try:
-            # 批量获取 Ticker（OKX 支持批量查询）
-            # 注意：OKX 的批量查询限制每次最多 100 个
-            batch_size = 100
-            all_tickers = []
+            # 使用 market_data_fetcher 获取 ticker
+            tickers = await self.market_data_fetcher.get_tickers_by_symbols(instruments)
 
-            for i in range(0, len(instruments), batch_size):
-                batch = instruments[i : i + batch_size]
-                inst_ids = ",".join(batch)
-
-                result = await self.client._request("GET", "/api/v5/market/tickers", params={"instType": "SWAP", "instId": inst_ids})
-
-                if result and len(result) > 0:
-                    all_tickers.extend(result)
-
-            self.logger.info(f"获取到 {len(all_tickers)} 个 Ticker 数据")
-            return all_tickers
+            self.logger.info(f"获取到 {len(tickers)} 个 Ticker 数据")
+            return tickers
 
         except Exception as e:
             self.logger.error(f"获取 Ticker 数据失败: {e}")

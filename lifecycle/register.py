@@ -29,6 +29,9 @@ from monitor.dashboard import Dashboard
 from scanner.market_scanner import MarketScanner
 from strategy.regime_detector import RegimeDetector
 
+# 新增：导入 Market Data Fetcher
+from exchange.market_data import MarketDataFetcher
+
 logger = logging.getLogger("Orchestrator")
 
 
@@ -71,6 +74,10 @@ class Register:
         position_manager = PositionManager(ctx)
         self.components["order_manager"] = order_manager
         self.components["position_manager"] = position_manager
+
+        # 1.5 组装市场数据层
+        market_data_fetcher = MarketDataFetcher(client, cfg)
+        self.components["market_data_fetcher"] = market_data_fetcher
         
         # 2. 组装风控层
         margin_guard = MarginGuard(cfg)
@@ -124,6 +131,7 @@ class Register:
                 # 创建 Market Scanner
                 market_scanner = MarketScanner(
                     client=client,
+                    market_data_fetcher=components["market_data_fetcher"] if "market_data_fetcher" in components else None,
                     config=market_scan_config,
                     regime_detector=regime_detector
                 )

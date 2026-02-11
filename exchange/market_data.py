@@ -3,7 +3,7 @@
 行情 / 资金费率
 """
 
-from typing import Optional
+from typing import Optional, List
 import logging
 from datetime import datetime
 
@@ -158,4 +158,82 @@ class MarketDataFetcher:
 
         except Exception as e:
             self.logger.error(f"Failed to get funding rate history for {symbol}: {e}")
+            return []
+
+    async def get_all_tickers(self) -> List[Dict]:
+        """
+        获取所有永续合约的 Ticker 数据
+
+        Returns:
+            List[Dict]: Ticker 数据列表
+        """
+        try:
+            result = await self.okx_client._request("GET", "/api/v5/market/tickers", params={"instType": "SWAP"})
+
+            if not result or len(result) == 0:
+                self.logger.error("获取 Ticker 数据失败")
+                return []
+
+            # 过滤 USDT 永续合约
+            tickers = []
+            for ticker in result:
+                inst_id = ticker.get("instId", "")
+                if inst_id.endswith("-USDT-SWAP"):
+                    # 添加标准化字段
+                    tickers.append({
+                        "instId": inst_id,
+                        "last": ticker.get("last", 0),
+                        "high24h": ticker.get("high24h", 0),
+                        "low24h": ticker.get("low24h", 0),
+                        "open24h": ticker.get("open24h", 0),
+                        "volCcy": ticker.get("volCcy", 0),
+                        "volCcy24h": ticker.get("volCcy24h", 0),
+                        "ts": ticker.get("ts", 0),
+                    })
+
+            self.logger.info(f"获取到 {len(tickers)} 个 Ticker 数据")
+            return tickers
+
+        except Exception as e:
+            self.logger.error(f"获取 Ticker 数据失败: {e}")
+            return []
+
+    async def get_tickers_by_symbols(self, symbols: List[str]) -> List[Dict]:
+        """
+        根据交易对列表获取 Ticker 数据
+
+        Args:
+            symbols: 交易对列表（如 ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]）
+
+        Returns:
+            List[Dict]: Ticker 数据列表
+        """
+        try:
+            # 批量获取 Ticker
+            inst_ids = ",".join(symbols)
+            result = await self.okx_client._request("GET", "/api/v5/market/tickers", params={"instType": "SWAP", "instId": inst_ids})
+
+            if not result or len(result) == 0:
+                self.logger.error("获取 Ticker 数据失败")
+                return []
+
+            # 添加标准化字段
+            tickers = []
+            for ticker in result:
+                tickers.append({
+                    "instId": ticker.get("instId", ""),
+                    "last": ticker.get("last", 0),
+                    "high24h": ticker.get("high24h", 0),
+                    "low24h": ticker.get("low24h", 0),
+                    "open24h": ticker.get("open24h", 0),
+                    "volCcy": ticker.get("volCcy", 0),
+                    "volCcy24h": ticker.get("volCcy24h", 0),
+                    "ts": ticker.get("ts", 0),
+                })
+
+            self.logger.info(f"获取到 {len(tickers)} 个 Ticker 数据")
+            return tickers
+
+        except Exception as e:
+            self.logger.error(f"获取 Ticker 数据失败: {e}")
             return []

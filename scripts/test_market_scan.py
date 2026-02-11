@@ -18,7 +18,7 @@ from monitor.dashboard import Dashboard
 
 
 def create_mock_klines(symbol="ETH-USDT-SWAP", num_klines=100):
-    """创建模拟 K 线数据"""
+    """创建模拟 K 线数据（OKX 格式，9 列）"""
     import random
     import time
 
@@ -32,15 +32,22 @@ def create_mock_klines(symbol="ETH-USDT-SWAP", num_klines=100):
         high_price = max(open_price, close_price) + random.uniform(0, 10)
         low_price = min(open_price, close_price) - random.uniform(0, 10)
         volume = random.uniform(1000, 10000)
+        vol_ccy = volume * close_price  # 成交额
+        vol_ccy_quote = vol_ccy  # 成交额（计价货币）
+        confirm = "1"  # 成交确认
 
-        klines.append({
-            "t": timestamp,
-            "o": open_price,
-            "h": high_price,
-            "l": low_price,
-            "c": close_price,
-            "vol": volume,
-        })
+        # OKX K 线格式: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+        klines.append([
+            timestamp,
+            str(open_price),
+            str(high_price),
+            str(low_price),
+            str(close_price),
+            str(volume),
+            str(vol_ccy),
+            str(vol_ccy_quote),
+            confirm
+        ])
 
         base_price = close_price
 

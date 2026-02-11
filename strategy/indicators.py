@@ -201,18 +201,39 @@ def normalize_klines(klines: List[Dict]) -> pd.DataFrame:
     标准化 K 线数据为 DataFrame
 
     Args:
-        klines: K线数据列表，每个元素包含：
-            - t/o/h/l/c/vol: 时间/开/高/低/收/量
+        klines: K线数据列表，支持两种格式：
+            1. 列表格式（OKX API 返回）：[[ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm], ...]
+            2. 字典格式：[{"t": ts, "o": open, "h": high, "l": low, "c": close, "vol": volume}, ...]
 
     Returns:
         pd.DataFrame: 标准化的 DataFrame
     """
-    df = pd.DataFrame(klines)
-    df.columns = ["timestamp", "open", "high", "low", "close", "volume", "vol_ccy", "vol_ccy_quote", "confirm"]
+    if not klines:
+        return pd.DataFrame()
+
+    # 判断数据格式
+    if isinstance(klines[0], list):
+        # 列表格式：[ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+        df = pd.DataFrame(klines, columns=["timestamp", "open", "high", "low", "close", "volume", "vol_ccy", "vol_ccy_quote", "confirm"])
+    else:
+        # 字典格式
+        df = pd.DataFrame(klines)
+        # 重命名列以匹配标准格式
+        df.rename(columns={
+            "t": "timestamp",
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "vol": "volume",
+            "vc": "volume",  # OKX 有时用 vc 表示 volume
+            "vq": "vol_ccy",
+        }, inplace=True)
 
     # 转换为数值类型
     for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
 
