@@ -36,6 +36,7 @@ class Runtime:
         self.margin_guard = components["margin_guard"]
         self.risk_manager = components.get("risk_manager")
         self.strategy_manager = components.get("strategy_manager")
+        self.order_manager = components.get("order_manager")  # ✅ 添加 order_manager
         # 可选组件（如果已加载）
         self.market_scanner = components.get("market_scanner")
         self.regime_detector = components.get("regime_detector")
@@ -347,26 +348,127 @@ class Runtime:
     async def _execute_trade(self, signal: Dict, approval: Optional[Dict] = None):
         """
         【12】执行交易 (Execution)
+        - 审计交易信息
         - 调用 OrderManager 执行下单
+        - 返回执行结果
         """
-        if not signal: return
+        # 1. 信号验证
+        if not signal:
+            Dashboard.log(f"❌ [审计] signal 为空", "ERROR")
+            return {"success": False, "error": "No signal"}
+
+        if not isinstance(signal, dict):
+            Dashboard.log(f"❌ [审计] signal 类型错误: {type(signal)}，期望 dict", "ERROR")
+            Dashboard.log(f"❌ [审计] signal 内容: {signal}", "ERROR")
+            return {"success": False, "error": f"Invalid signal type: {type(signal)}"}
 
         symbol = signal.get("symbol")
         side = signal.get("side")
+
+        if not symbol or not side:
+            Dashboard.log(f"❌ [审计] signal 缺少必要字段: symbol={symbol}, side={side}", "ERROR")
+            return {"success": False, "error": "Missing required fields in signal"}
 
         # ✅ 修复: 增加 await
         await self.state_machine.transition_to(SystemState.OPENING_POSITION)
         Dashboard.log(f"⚡ [Execution] 开始执行: {symbol} {side}", "INFO")
 
+        result = {"success": False, "error": "Unknown"}
+
         try:
-            # 1. 提取参数
-            size = float(signal.get("size", 0))
+            # 2. 提取参数（带安全检查）
+            size_value = signal.get("size")
+            if size_value is None:
+                Dashboard.log(f"❌ [审计] signal 缺少 size 字段", "ERROR")
+                return {"success": False, "error": "Missing size in signal"}
+
+            try:
+                size = float(size_value)
+            except (ValueError, TypeError) as e:
+                Dashboard.log(f"❌ [审计] size 值无效: {size_value}, 错误: {e}", "ERROR")
+                return {"success": False, "error": f"Invalid size: {size_value}"}
+
             order_type = signal.get("type", "market")
             price = signal.get("price")
+            leverage = signal.get("leverage", 1)
+            stop_loss = signal.get("stop_loss")
+            take_profit = signal.get("take_profit")
 
-            # 2. 处理网格批量订单
+            # 3. 交易审计 - 获取当前价格
+            ticker = await self.client.get_ticker(symbol)
+            if not ticker:
+                Dashboard.log(f"❌ [审计] 无法获取 {symbol} 当前价格", "ERROR")
+                return {"success": False, "error": "无法获取当前价格"}
+
+            current_price = float(ticker.get("last", 0))
+            if current_price == 0:
+                Dashboard.log(f"❌ [审计] {symbol} 当前价格无效", "ERROR")
+                return {"success": False, "error": "当前价格无效"}
+
+            # 计算订单价值
+            order_value = current_price * size
+
+            # 计算保证金
+            margin = order_value / leverage
+
+            # 获取账户信息计算保证金率
+            balance = self.context.get_total_balance()
+            margin_ratio = (balance / margin) * 100 if margin > 0 else 9999
+
+            # 计算强平价格（简化公式）
+            if side == "buy":
+                # 做多：强平价 = 开仓价 * (1 - 1/杠杆 + 维持保证金率)
+                maintenance_margin_rate = 0.005  # 假设维持保证金率 0.5%
+                liquidation_price = current_price * (1 - 1/leverage + maintenance_margin_rate)
+            else:
+                # 做空：强平价 = 开仓价 * (1 + 1/杠杆 - 维持保证金率)
+                maintenance_margin_rate = 0.005
+                liquidation_price = current_price * (1 + 1/leverage - maintenance_margin_rate)
+
+            # 4. 打印审计信息
+            Dashboard.log("=" * 80, "INFO")
+            Dashboard.log("📋 [交易审计] 订单信息", "INFO")
+            Dashboard.log("-" * 80, "INFO")
+            Dashboard.log(f"交易对:      {symbol}", "INFO")
+            Dashboard.log(f"交易方向:    {'开多 (LONG)' if side == 'buy' else '开空 (SHORT)'}", "INFO")
+            Dashboard.log(f"当前价格:    {current_price:.6f} USDT", "INFO")
+            Dashboard.log(f"交易数量:    {size:.6f}", "INFO")
+            Dashboard.log(f"杠杆倍数:    {leverage}x", "INFO")
+            Dashboard.log("-" * 80, "INFO")
+            Dashboard.log(f"订单价值:    {order_value:.2f} USDT", "INFO")
+            Dashboard.log(f"保证金:      {margin:.2f} USDT", "INFO")
+            Dashboard.log(f"账户余额:    {balance:.2f} USDT", "INFO")
+            Dashboard.log(f"保证金率:    {margin_ratio:.2f}%", "INFO")
+            Dashboard.log("-" * 80, "INFO")
+            Dashboard.log(f"强平价格:    {liquidation_price:.6f} USDT", "INFO")
+            if stop_loss:
+                stop_loss_pct = abs((stop_loss - current_price) / current_price) * 100
+                Dashboard.log(f"止损价格:    {stop_loss:.6f} USDT (止损 {stop_loss_pct:.2f}%)", "INFO")
+            else:
+                Dashboard.log(f"止损价格:    未设置", "INFO")
+            if take_profit:
+                take_profit_pct = abs((take_profit - current_price) / current_price) * 100
+                Dashboard.log(f"止盈价格:    {take_profit:.6f} USDT (止盈 {take_profit_pct:.2f}%)", "INFO")
+            else:
+                Dashboard.log(f"止盈价格:    未设置", "INFO")
+            Dashboard.log("=" * 80, "INFO")
+            Dashboard.log("-" * 80, "INFO")
+            Dashboard.log(f"强平价格:    {liquidation_price:.6f} USDT", "INFO")
+            if stop_loss:
+                stop_loss_pct = abs((stop_loss - current_price) / current_price) * 100
+                Dashboard.log(f"止损价格:    {stop_loss:.6f} USDT (止损 {stop_loss_pct:.2f}%)", "INFO")
+            else:
+                Dashboard.log(f"止损价格:    未设置", "INFO")
+            if take_profit:
+                take_profit_pct = abs((take_profit - current_price) / current_price) * 100
+                Dashboard.log(f"止盈价格:    {take_profit:.6f} USDT (止盈 {take_profit_pct:.2f}%)", "INFO")
+            else:
+                Dashboard.log(f"止盈价格:    未设置", "INFO")
+            Dashboard.log("=" * 80, "INFO")
+
+            # 4. 处理网格批量订单
             if "orders" in signal and isinstance(signal["orders"], list):
-                self.logger.info(f"⚡ 执行批量挂单 ({len(signal['orders'])} 笔)...")
+                logger.info(f"⚡ 执行批量挂单 ({len(signal['orders'])} 笔)...")
                 success_count = 0
                 for order in signal["orders"]:
                     ok, _ = await self.order_manager.submit_single_order(
@@ -382,7 +484,7 @@ class Runtime:
 
                 result = {"success": success_count > 0, "message": f"挂单 {success_count} 笔"}
 
-            # 3. 处理普通单腿订单
+            # 5. 处理普通单腿订单
             else:
                 success, order_id = await self.order_manager.submit_single_order(
                     symbol=symbol,
@@ -393,21 +495,19 @@ class Runtime:
                 )
                 result = {"success": success, "order_id": order_id}
 
-            # 4. 结果处理
+            # 6. 结果处理
             if result["success"]:
-                Dashboard.log(f"✅ 交易成功", "SUCCESS")
-                self._update_context(signal, result)
+                Dashboard.log(f"✅ [Execution] 订单提交成功", "SUCCESS")
             else:
-                Dashboard.log(f"❌ 交易失败: {result.get('error_msg', 'Unknown')}", "ERROR")
+                Dashboard.log(f"❌ [Execution] 订单提交失败: {result.get('error_msg', 'Unknown')}", "ERROR")
+                result["error"] = result.get('error_msg', 'Unknown')
 
         except Exception as e:
-            self.logger.error(traceback.format_exc())
-            # ✅ 修复: 增加 await
-            await self.state_machine.transition_to(SystemState.ERROR)
+            logger.error(traceback.format_exc())
+            Dashboard.log(f"❌ [Execution] 交易异常: {e}", "ERROR")
+            result = {"success": False, "error": str(e)}
 
-        finally:
-            # ✅ 修复: 增加 await
-            await self.state_machine.transition_to(SystemState.MONITORING)
+        return result
     async def _update_context(self, signal: Dict, execution_result: Dict):
         """
         【13】更新 Context
