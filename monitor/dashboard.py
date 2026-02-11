@@ -225,7 +225,7 @@ class Dashboard:
         """
         打印市场环境分析详情
         Args:
-            best_candidate: ScanResult 对象（最佳候选）
+            best_candidate: ScanResult 对象或 RegimeAnalysis 对象
         """
         print(f"\n{Colors.HEADER}🌊 [Regime] 市场环境分析详情 - {best_candidate.symbol}{Colors.RESET}")
         print("-" * 80)
@@ -240,7 +240,14 @@ class Dashboard:
             regime_desc = f"{Colors.RED}🌪️ 混乱市{Colors.RESET} - 高波动无方向，建议观望"
 
         print(f"   市场环境: {regime_desc}")
-        print(f"   置信度: {best_candidate.to_dict()['confidence']}")
+
+        # 获取置信度（RegimeAnalysis 有 confidence 字段，ScanResult 没有）
+        if hasattr(best_candidate, 'confidence'):
+            print(f"   置信度: {best_candidate.confidence:.2%}")
+        elif hasattr(best_candidate, 'to_dict'):
+            dict_data = best_candidate.to_dict()
+            if 'confidence' in dict_data:
+                print(f"   置信度: {dict_data['confidence']}")
 
         # 技术指标
         print(f"\n   📊 技术指标:")
@@ -252,21 +259,28 @@ class Dashboard:
         # 价格信息
         print(f"\n   💰 价格信息:")
         print(f"      当前价格: ${best_candidate.current_price:.2f}")
-        print(f"      24H 最高: ${best_candidate.high_24h:.2f}")
-        print(f"      24H 最低: ${best_candidate.low_24h:.2f}")
-        print(f"      24H 涨跌幅: {best_candidate.price_change_24h:+.2f}%")
 
-        # 成交额
-        volume = best_candidate.volume_24h
-        if volume >= 100000000:
-            vol_str = f"{volume / 100000000:.2f} 亿 USDT"
-        elif volume >= 1000000:
-            vol_str = f"{volume / 1000000:.2f} 万 USDT"
-        else:
-            vol_str = f"{volume:.2f} USDT"
-        print(f"      24H 成交额: {vol_str}")
+        # ScanResult 特有字段
+        if hasattr(best_candidate, 'high_24h'):
+            print(f"      24H 最高: ${best_candidate.high_24h:.2f}")
+        if hasattr(best_candidate, 'low_24h'):
+            print(f"      24H 最低: ${best_candidate.low_24h:.2f}")
+        if hasattr(best_candidate, 'price_change_24h'):
+            print(f"      24H 涨跌幅: {best_candidate.price_change_24h:+.2f}%")
 
-        # 综合评分
-        print(f"\n   🎯 综合评分: {Colors.GREEN}{best_candidate.score:.1f}/100{Colors.RESET}")
+        # 成交额（ScanResult 特有）
+        if hasattr(best_candidate, 'volume_24h'):
+            volume = best_candidate.volume_24h
+            if volume >= 100000000:
+                vol_str = f"{volume / 100000000:.2f} 亿 USDT"
+            elif volume >= 1000000:
+                vol_str = f"{volume / 1000000:.2f} 万 USDT"
+            else:
+                vol_str = f"{volume:.2f} USDT"
+            print(f"      24H 成交额: {vol_str}")
+
+        # 综合评分（ScanResult 特有）
+        if hasattr(best_candidate, 'score'):
+            print(f"\n   🎯 综合评分: {Colors.GREEN}{best_candidate.score:.1f}/100{Colors.RESET}")
 
         print("-" * 80 + "\n")

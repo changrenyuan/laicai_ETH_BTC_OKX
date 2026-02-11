@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 
 from core.context import MarketData
-from .okx_client import OKXClient
+from exchange.okx_client import OKXClient
 
 
 class MarketDataFetcher:
@@ -160,7 +160,7 @@ class MarketDataFetcher:
             self.logger.error(f"Failed to get funding rate history for {symbol}: {e}")
             return []
 
-    async def get_all_tickers(self) -> List[Dict]:
+    async def get_all_tickers(self) -> List[dict]:
         """
         获取所有永续合约的 Ticker 数据
 
@@ -198,7 +198,7 @@ class MarketDataFetcher:
             self.logger.error(f"获取 Ticker 数据失败: {e}")
             return []
 
-    async def get_tickers_by_symbols(self, symbols: List[str]) -> List[Dict]:
+    async def get_tickers_by_symbols(self, symbols: List[str]) -> List[dict]:
         """
         根据交易对列表获取 Ticker 数据
 

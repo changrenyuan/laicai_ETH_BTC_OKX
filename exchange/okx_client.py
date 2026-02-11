@@ -232,3 +232,26 @@ class OKXClient:
         if inst_id:
             params["instId"] = inst_id
         return await self._request("GET", "/api/v5/trade/orders-pending", params=params)
+
+    async def cancel_all_orders(self):
+        """撤销所有挂单"""
+        self.logger.info("正在撤销所有挂单...")
+        try:
+            # 获取所有未成交订单
+            pending = await self._request("GET", "/api/v5/trade/orders-pending", params={"instType": "SWAP"})
+            if not pending:
+                self.logger.info("✅ 当前无挂单")
+                return
+
+            for order in pending:
+                inst_id = order.get("instId")
+                ord_id = order.get("ordId")
+                self.logger.info(f"撤销订单: {inst_id} (ID: {ord_id})")
+
+                await self.client._request("POST", "/api/v5/trade/cancel-order", data={
+                    "instId": inst_id,
+                    "ordId": ord_id
+                })
+
+        except Exception as e:
+            self.logger.error(f"❌ 撤单异常: {e}")
