@@ -28,7 +28,7 @@ from monitor.dashboard import Dashboard
 # 新增：导入 Scanner 和 Regime Detector
 from scanner.market_scanner import MarketScanner
 from strategy.regime_detector import RegimeDetector
-
+from strategy.strategy_manager import StrategyManager
 # 新增：导入 Market Data Fetcher
 from exchange.market_data import MarketDataFetcher
 
@@ -137,6 +137,9 @@ class Register:
                 )
                 self.components["market_scanner"] = market_scanner
                 Dashboard.log("✅ Market Scanner 注册成功", "SUCCESS")
+                strategy_manager = StrategyManager(cfg, ctx, sm, order_manager, bus)
+                self.components["strategy_manager"] = strategy_manager
+                Dashboard.log("✅ Strategy manager 注册成功", "SUCCESS")
 
             except Exception as e:
                 logger.error(f"注册 Scanner 或 Regime Detector 失败: {e}")

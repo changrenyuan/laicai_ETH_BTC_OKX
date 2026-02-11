@@ -104,9 +104,9 @@ def setup_logging():
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     # 1. 终端输出
-    # console_handler = logging.StreamHandler()
-    # console_handler.setFormatter(formatter)
-    # root_logger.addHandler(console_handler)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
 
     # 2. 文件输出 (新增：生成 runtime.log)
     file_handler = RotatingFileHandler(

@@ -1,12 +1,11 @@
 """
-🕸️ 动态 AI 合约网格策略 (修复版)
+🕸️ 动态 AI 合约网格策略 (纯信号生成版)
 """
 import logging
-import asyncio
-import pandas as pd
+from typing import Dict, Optional, List
+import math
+
 from strategy.base_strategy import BaseStrategy
-from strategy.grid_utils import GridUtils
-# 注意：这里不再需要导入 Dashboard，策略只负责干活，不负责画图
 
 class FuturesGridStrategy(BaseStrategy):
     def __init__(self, config, context, state_machine, order_manager, **kwargs):
@@ -14,223 +13,114 @@ class FuturesGridStrategy(BaseStrategy):
         self.logger = logging.getLogger("GridStrategy")
         self.cfg = config.get("futures_grid", {})
 
+        # 配置参数
         self.symbol = self.cfg.get("symbol", "ETH-USDT-SWAP")
-        self.investment = self.cfg.get("investment", 500)
-        self.leverage = self.cfg.get("leverage", 3)
-        self.grid_count = int(self.cfg.get("grid_count", 20))
+        self.investment = float(self.cfg.get("investment", 20))
+        self.leverage = int(self.cfg.get("leverage", 5))
+        self.grid_count = int(self.cfg.get("grid_count", 23))
 
-        # 状态
-        self.account_info = {}
-        self.trends = {}
-        self.plan = {}
-        self.grids = []
+        # 状态标记
+        self.is_initialized = False
 
     async def initialize(self):
-        self.logger.info("正在初始化网格策略逻辑...")
-
-        # 1. 获取账户信息 (仅用于内部计算，不打印)
-        bal = await self.om.client.get_trading_balances()
-        if bal and len(bal) > 0:
-            details = bal[0]['details'][0]
-            self.account_info = {
-                'totalEq': float(details.get('eq', 0)),
-                'availBal': float(details.get('availBal', 0))
-            }
-
-        # 2. 多周期趋势分析
-        await self._analyze_market_trends()
-
-        # 3. 生成网格计划
-        await self._generate_grid_plan()
-
-        # 4. 执行挂单
-        # await self._execute_grid()
-
+        """
+        初始化：仅做状态标记，不进行任何交易动作
+        注意：具体的杠杆设置建议移交至 OrderManager 或 execution 层统一处理，
+        此处策略只负责汇报它需要的杠杆倍数。
+        """
+        self.logger.info(f"✅ 网格策略 ({self.symbol}) 已就绪，等待扫描信号...")
         self.is_initialized = True
-        self.logger.info("✅ 网格策略初始化完成")
 
-    async def _analyze_market_trends(self):
-        """分析 1D, 4H, 15m 趋势"""
-        periods = {"1D": "1D", "4H": "4H", "15m": "15m"}
-        results = {}
-
-        for name, bar in periods.items():
-            # 这里调用 client 获取 K 线
-            # 注意：需确保 client 有 get_candlesticks 方法
-            # 如果没有，请在 exchange/okx_client.py 中添加 (参考之前提供的代码)
-            klines = []
-            if hasattr(self.om.client, 'get_candlesticks'):
-                klines = await self.om.client.get_candlesticks(self.symbol, bar=bar, limit=50)
-
-            if klines:
-                df = pd.DataFrame(klines, columns=["ts", "o", "h", "l", "c", "vol", "vc", "vq", "cf"])
-                df["c"] = df["c"].astype(float)
-                ma20 = df["c"].rolling(20).mean().iloc[-1]
-                curr = df["c"].iloc[-1]
-
-                if curr > ma20 * 1.01: results[name] = "Bullish"
-                elif curr < ma20 * 0.99: results[name] = "Bearish"
-                else: results[name] = "Neutral"
-
-                if name == "15m":
-                    results['ATR'] = GridUtils.calculate_atr(klines)
-
-        self.trends = results
-        # 策略层不直接打印 Dashboard，数据会通过 Context 或日志体现
-        self.logger.info(f"市场趋势分析结果: {self.trends}")
-
-    async def _generate_grid_plan(self):
-        """生成网格参数"""
-        ticker = await self.om.client.get_ticker(self.symbol)
-        if not ticker: return
-        curr_price = float(ticker[0]['last'])
-
-        atr = self.trends.get('ATR', curr_price * 0.01)
-        range_pct = (atr * 10) / curr_price
-
-        lower = curr_price * (1 - range_pct)
-        upper = curr_price * (1 + range_pct)
-
-        self.grids = GridUtils.generate_grid_lines(lower, upper, self.grid_count)
-
-        profit_pct = (upper - lower) / self.grid_count / curr_price
-
-        self.plan = {
-            'lower': round(lower, 2),
-            'upper': round(upper, 2),
-            'grid_count': self.grid_count,
-            'investment': self.investment,
-            'profit_per_grid': profit_pct
-        }
-        self.logger.info(f"网格计划生成: {self.plan}")
-
-    async def _execute_grid(self):
-        """执行挂单"""
-        ticker = await self.om.client.get_ticker(self.symbol)
-        if not ticker: return
-        curr_price = float(ticker[0]['last'])
-
-        orders = []
-        sz = "1"  # 请确保该张数符合最小下单要求
-
-        for price in self.grids:
-            if abs(price - curr_price) / curr_price < 0.002: continue
-
-            # 修复点：根据价格位置确定 side 和 posSide
-            # 价格高于现价：卖出开空 (side=sell, posSide=short)
-            # 价格低于现价：买入开多 (side=buy, posSide=long)
-            if price > curr_price:
-                side = "sell"
-                pos_side = "short"
-            else:
-                side = "buy"
-                pos_side = "long"
-
-            orders.append({
-                "instId": self.symbol,
-                "tdMode": "cross",
-                "side": side,
-                "posSide": pos_side,  # 新增：显式指定仓位方向
-                "ordType": "limit",
-                "px": str(price),
-                "sz": sz
-            })
-
-        if orders:
-            self.logger.info(f"准备批量挂单 {len(orders)} 个...")
-            if hasattr(self.om.client, 'place_batch_orders'):
-                res = await self.om.client.place_batch_orders(orders)
-                # 日志会显示具体的下单结果
-                self.logger.info(f"批量挂单响应: {len(res) if res else 0} 条")
-            else:
-                self.logger.warning("Client 缺少 place_batch_orders 方法，跳过挂单")
-    async def run_tick(self):
+    async def analyze_signal(self) -> Optional[Dict]:
+        """
+        🧠 核心大脑：计算网格，生成所有待执行订单，但不执行。
+        """
         if not self.is_initialized:
             await self.initialize()
-        # 可以在这里添加心跳日志
-        # self.logger.debug("Grid strategy tick...")
-
-    async def analyze_signal(self) -> dict:
-        """
-        【9】策略信号判断
-        - 是否震荡（ADX<25）
-        - 是否情绪过度
-        - 是否满足统计优势
-        返回信号字典或 None
-        """
-        # 网格策略通常不需要主动信号，这里实现一个简单的版本
-        # 可以根据实际需求扩展
-
-        # 1. 检查是否有网格线被触发
-        # 这里简化处理，实际需要监听订单成交事件
-
-        # 2. 如果没有需要补单的网格，返回 None
-        # 网格策略通常是被动执行的
-
-        self.logger.debug("网格策略信号检查：无主动信号（网格策略为被动触发）")
-
-        return None
-
-    async def execute(self, signal: dict, approval: dict) -> dict:
-        """
-        【12】执行交易
-        - 原子下单（现货/合约）
-        - 处理跛脚/撤单/补单
-        - 对冲检查
-
-        返回执行结果
-        """
-        result = {
-            "success": False,
-            "error": "",
-            "position": None,
-            "order_id": ""
-        }
 
         try:
-            # 网格策略通常是预挂单，这里可以实现补充网格的逻辑
-            # 例如：某个网格成交后，在对侧补单
+            # 1. 检查是否已有持仓 (如果有持仓，暂不生成开仓信号，防止重复开单)
+            current_pos = self.context.get_position(self.symbol)
+            if current_pos and float(current_pos.quantity) != 0:
+                # 这里可以扩展：计算是否需要补单，如果需要，返回“补单”信号
+                return None
 
-            # 示例：执行补充订单
-            if "side" in signal and "size" in signal:
-                success = await self.om.execute_dual_leg(
-                    spot_symbol=self.symbol.replace("-SWAP", ""),  # 现货
-                    spot_size=signal["size"],
-                    swap_symbol=self.symbol,  # 合约
-                    swap_size=signal["size"]
-                )
+            # 2. 获取市场价格
+            ticker = await self.om.client.get_ticker(self.symbol)
+            if not ticker:
+                return None
+            current_price = float(ticker['last'])
 
-                result["success"] = success
-                if success:
-                    result["position"] = {
-                        "symbol": self.symbol,
-                        "side": signal["side"],
-                        "size": signal["size"]
-                    }
+            # 3. 计算网格参数 (示例逻辑：上下 10% 区间，等差网格)
+            # 实际应用中建议结合 ATR 或布林带计算 dynamic range
+            range_pct = 0.10
+            lower_price = current_price * (1 - range_pct)
+            upper_price = current_price * (1 + range_pct)
+
+            # 计算每格价格间隔
+            price_step = (upper_price - lower_price) / self.grid_count
+
+            # 4. 生成所有网格挂单明细 (Plan Orders)
+            pending_orders = []
+
+            # 计算单格下单数量 (假设做多网格，资金均分)
+            # 注意：实际需考虑合约面值(contract_val)和最小下单单位
+            # 这里简化为按 USDT 价值估算张数，实际需调用 instrument info
+            total_margin = self.investment * self.leverage
+            amount_per_grid = total_margin / self.grid_count
+            # 假设 1张 = 10 USDT (需根据币种调整，这里仅做演示)
+            size_per_grid = max(1, int(amount_per_grid / 10))
+
+            self.logger.info(f"📊 [网格计算] 价格:{current_price} | 区间:[{lower_price:.2f}, {upper_price:.2f}] | 格数:{self.grid_count}")
+
+            # 循环生成 Limit Orders
+            for i in range(self.grid_count):
+                grid_price = lower_price + (i * price_step)
+
+                # 简单逻辑：
+                # 低于当前价 -> 挂买单 (做多接货)
+                # 高于当前价 -> 挂卖单 (平仓获利)
+                if grid_price < current_price:
+                    side = "buy"
                 else:
-                    result["error"] = "下单失败"
+                    side = "sell"
 
-            return result
+                # 构造标准订单结构
+                order_plan = {
+                    "symbol": self.symbol,
+                    "price": f"{grid_price:.4f}", # 格式化价格
+                    "size": str(size_per_grid),
+                    "side": side,
+                    "type": "limit",              # 限价单
+                    "reduce_only": False          # 网格单通常非只减仓
+                }
+                pending_orders.append(order_plan)
+
+            # 5. 打包信号并返回给 Runtime/Audit
+            if pending_orders:
+                signal = {
+                    "symbol": self.symbol,
+                    "action": "grid_start",       # 动作类型
+                    "strategy": "futures_grid",
+                    "leverage": self.leverage,    # 告知 execution 层需要设置的杠杆
+                    "orders": pending_orders,     # 🔥 核心：包含 20-30 个待执行订单的列表
+                    "reason": f"Grid Init: {lower_price:.2f}-{upper_price:.2f}"
+                }
+                self.logger.info(f"🚀 [策略产出] 生成 {len(pending_orders)} 个网格挂单计划，发送至审计...")
+                return signal
+
+            return None
 
         except Exception as e:
-            result["error"] = str(e)
-            self.logger.error(f"执行异常: {e}")
-            return result
+            self.logger.error(f"策略分析异常: {e}")
+            return None
 
     async def shutdown(self):
-        """策略停止时的清理工作（撤销所有挂单）"""
-        self.logger.warning("🛑 撤销所有网格挂单...")
-
-        try:
-            # 撤销所有未成交的订单
-            if hasattr(self.om.client, 'cancel_all_orders'):
-                result = await self.om.client.cancel_all_orders(self.symbol)
-                if result:
-                    self.logger.info(f"✅ 已撤销 {len(result)} 个挂单")
-            else:
-                self.logger.warning("Client 缺少 cancel_all_orders 方法，无法撤销挂单")
-
-        except Exception as e:
-            self.logger.error(f"撤销挂单失败: {e}")
-
-        self.is_initialized = False
+        """
+        策略停止时的逻辑
+        注意：策略不直接撤单，而是发出'停止'信号请求 Runtime 撤单
+        """
+        self.logger.info("🛑 策略停止，建议 Runtime 撤销相关挂单。")
+        # 这里不需要 await self.om.cancel...
+        # 实际的撤单动作应由 Runtime 在监测到状态变化时触发
+        pass

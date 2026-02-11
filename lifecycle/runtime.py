@@ -35,7 +35,7 @@ class Runtime:
         self.exchange_guard = components["exchange_guard"]
         self.margin_guard = components["margin_guard"]
         self.risk_manager = components.get("risk_manager")
-
+        self.strategy_manager = components.get("strategy_manager")
         # 可选组件（如果已加载）
         self.market_scanner = components.get("market_scanner")
         self.regime_detector = components.get("regime_detector")
@@ -227,14 +227,17 @@ class Runtime:
         """
         try:
             signals = []
+            scan_results = await self._market_scan()
+            for candidate in scan_results:
+                symbol = candidate.symbol
+                regime = candidate.regime
+                # 调用策略的 analyze_signal 方法
+                signal = await self.strategy_manager.generate(symbol, regime)
 
-            # 调用策略的 analyze_signal 方法
-            signal = await self.strategy.analyze_signal()
-
-            if signal:
-                signals.append(signal)
-                self.context.add_strategy_signal(signal)
-                Dashboard.log(f"🎯 [Strategy] 检测到交易信号: {signal.get('reason', '')}", "INFO")
+                if signal:
+                    signals.append(signal)
+                    self.context.add_strategy_signal(signal)
+                    Dashboard.log(f"🎯 [Strategy] 检测到交易信号: {signal.get('reason', '')}", "INFO")
 
             return signals
 

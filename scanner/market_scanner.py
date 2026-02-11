@@ -6,7 +6,7 @@
 2. 初筛标的（流动性、交易额、涨跌幅度、ADX、波动率扩张、价格分布、量价结构）
 3. 生成候选列表
 """
-
+import asyncio
 import logging
 import pandas as pd
 import numpy as np
@@ -265,60 +265,66 @@ class MarketScanner:
 
     async def _analyze_candidates(self, tickers: List[Dict]) -> List[ScanResult]:
         """
-        对候选品种进行技术分析
-
-        Args:
-            tickers: 筛选后的 Ticker 列表
-
-        Returns:
-            List[ScanResult]: 扫描结果列表
+        并发对候选品种进行技术分析
         """
         candidates = []
 
-        for ticker in tickers:
-            try:
-                symbol = ticker.get("instId")
+        # 🟢 创建信号量，限制最大并发数为 20
+        # OKX 公共接口限频通常较宽松，但为了安全起见限制并发
+        sem = asyncio.Semaphore(5)
 
-                # 获取 4H K 线（用于计算技术指标）
-                klines = await self.client.get_candlesticks(symbol, bar="4H", limit=100)
+        async def process_ticker(ticker):
+            """单个品种的处理逻辑封装"""
+            async with sem:  # 获取令牌
+                try:
+                    symbol = ticker.get("instId")
 
-                if not klines or len(klines) < 50:
-                    self.logger.warning(f"{symbol} K 线数据不足，跳过")
-                    continue
+                    # 获取 4H K 线
+                    klines = await self.client.get_candlesticks(symbol, bar="4H", limit=100)
 
-                # 使用 Regime Detector 判断市场环境（这会计算所有技术指标）
-                regime_analysis: RegimeAnalysis = self.regime_detector.analyze(symbol, klines)
+                    if not klines or len(klines) < 50:
+                        return None
 
-                if not regime_analysis:
-                    self.logger.warning(f"{symbol} 市场环境分析失败，跳过")
-                    continue
+                    # 市场环境分析
+                    regime_analysis = self.regime_detector.analyze(symbol, klines)
+                    if not regime_analysis:
+                        return None
 
-                # 计算综合评分
-                score = self._calculate_score(ticker, regime_analysis)
+                    # 计算分数
+                    score = self._calculate_score(ticker, regime_analysis)
 
-                candidate = ScanResult(
-                    symbol=symbol,
-                    volume_24h=ticker.get("_volume_24h", 0),
-                    price_change_24h=ticker.get("_price_change_24h", 0),
-                    current_price=ticker.get("_current_price", 0),
-                    high_24h=ticker.get("_high_24h", 0),
-                    low_24h=ticker.get("_low_24h", 0),
-                    score=score,
-                    regime=regime_analysis.regime,
-                    adx=regime_analysis.adx,
-                    atr=regime_analysis.atr,
-                    atr_expansion=regime_analysis.atr_expansion,
-                    volatility_ratio=regime_analysis.volatility_ratio,
-                )
+                    return ScanResult(
+                        symbol=symbol,
+                        volume_24h=ticker.get("_volume_24h", 0),
+                        price_change_24h=ticker.get("_price_change_24h", 0),
+                        current_price=ticker.get("_current_price", 0),
+                        high_24h=ticker.get("_high_24h", 0),
+                        low_24h=ticker.get("_low_24h", 0),
+                        score=score,
+                        regime=regime_analysis.regime,
+                        adx=regime_analysis.adx,
+                        atr=regime_analysis.atr,
+                        atr_expansion=regime_analysis.atr_expansion,
+                        volatility_ratio=regime_analysis.volatility_ratio,
+                    )
+                except Exception as e:
+                    self.logger.warning(f"分析 {ticker.get('instId')} 失败: {e}")
+                    return None
 
-                candidates.append(candidate)
+        # 🟢 创建所有任务
+        tasks = [process_ticker(t) for t in tickers]
 
-            except Exception as e:
-                self.logger.error(f"分析候选品种失败: {e}")
-                continue
+        # 🟢 并发执行并等待结果
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 收集成功的结果
+        for res in results:
+            if isinstance(res, ScanResult):
+                candidates.append(res)
+            elif isinstance(res, Exception):
+                self.logger.error(f"任务异常: {res}")
 
         return candidates
-
     def _calculate_score(self, ticker: Dict, regime_analysis: RegimeAnalysis) -> float:
         """
         计算综合评分

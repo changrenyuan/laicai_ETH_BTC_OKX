@@ -7,7 +7,7 @@
 # 选项:
 #   "futures_grid"   - 合约网格 (当前市场贴水/震荡时使用)
 #   "cash_and_carry" - 资金费率套利 (牛市/正溢价时使用)
-active_strategy: "futures_grid"
+active_strategy: "trend_strategy"
 
 strategy:
   enabled: true
@@ -18,11 +18,11 @@ strategy:
 # ==========================================
 market_scan:
   enabled: true               # 是否开启市场扫描
-  top_n: 15                    # 返回前 N 个候选品种
-  min_volume_24h: 10000000    # 最小 24h 成交额 (1000 万 USDT)
+  top_n: 10                    # 返回前 N 个候选品种
+  min_volume_24h: 50000000    # 最小 24h 成交额 (1000 万 USDT)
   min_price_change: 1.0       # 最小涨跌幅 1%
   max_price_change: 20.0      # 最大涨跌幅 20%
-  scan_interval: 60           # 扫描间隔（秒）
+  scan_interval: 120           # 扫描间隔（秒）
 
 # ==========================================
 # 🌊 市场环境检测配置 (Regime Detector)
