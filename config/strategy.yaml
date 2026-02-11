@@ -18,7 +18,7 @@ strategy:
 # ==========================================
 market_scan:
   enabled: true               # 是否开启市场扫描
-  top_n: 5                    # 返回前 N 个候选品种
+  top_n: 15                    # 返回前 N 个候选品种
   min_volume_24h: 10000000    # 最小 24h 成交额 (1000 万 USDT)
   min_price_change: 1.0       # 最小涨跌幅 1%
   max_price_change: 20.0      # 最大涨跌幅 20%

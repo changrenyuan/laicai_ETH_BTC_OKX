@@ -7,7 +7,8 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
-
+import logging
+from logging.handlers import RotatingFileHandler
 # 添加项目根目录到路径
 ROOT_DIR = Path(__file__).parent
 sys.path.insert(0, str(ROOT_DIR))
@@ -90,11 +91,38 @@ class QuantEngine:
             await shutdown.run()
 
 
+def setup_logging():
+    # 确保目录存在
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # 获取根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # 格式化器
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    # 1. 终端输出
+    # console_handler = logging.StreamHandler()
+    # console_handler.setFormatter(formatter)
+    # root_logger.addHandler(console_handler)
+
+    # 2. 文件输出 (新增：生成 runtime.log)
+    file_handler = RotatingFileHandler(
+        log_dir / "runtime.log",
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
 def main():
     """主函数"""
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
+    setup_logging()
     engine = QuantEngine()
     try:
         asyncio.run(engine.run())

@@ -203,7 +203,8 @@ class Context:
         if total_margin > 0:
             self.margin_ratio = total_equity / total_margin
         else:
-            self.margin_ratio = float("inf")
+            # 无持仓时设为 9999 代表“空闲状态”
+            self.margin_ratio = 9999
 
         return self.margin_ratio
 

@@ -41,8 +41,8 @@ class Runtime:
         self.regime_detector = components.get("regime_detector")
 
         # 配置
-        self.market_scan_config = config.get("strategy", {}).get("market_scan", {})
-        self.regime_config = config.get("strategy", {}).get("regime", {})
+        self.market_scan_config = config.get("market_scan", {})
+        self.regime_config = config.get("regime", {})
 
         # 扫描控制
         self.last_scan_time = 0
@@ -93,7 +93,7 @@ class Runtime:
                 # --- 【8】市场扫描 (Scanner) ---
                 scan_results = []
                 market_scan_enabled = self.market_scan_config.get("enabled", False)
-
+                # print(market_scan_enabled)
                 if market_scan_enabled and (now - self.last_scan_time > self.scan_interval):
                     scan_results = await self._market_scan()
                     self.last_scan_time = now

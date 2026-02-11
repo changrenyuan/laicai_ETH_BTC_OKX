@@ -118,9 +118,9 @@ class Register:
         self.components["pnl_tracker"] = pnl_tracker
 
         # 5. 组装市场扫描层（Scanner + Regime Detector）
-        market_scan_config = cfg.get("strategy", {}).get("market_scan", {})
-        regime_config = cfg.get("strategy", {}).get("regime", {})
-
+        market_scan_config = cfg.get("market_scan", {})
+        regime_config = cfg.get("regime", {})
+        # print(f"DEBUG: market_scan_config = {market_scan_config}")
         if market_scan_config.get("enabled", False):
             try:
                 # 创建 Regime Detector
@@ -131,7 +131,7 @@ class Register:
                 # 创建 Market Scanner
                 market_scanner = MarketScanner(
                     client=client,
-                    market_data_fetcher=components["market_data_fetcher"] if "market_data_fetcher" in components else None,
+                    market_data_fetcher=self.components["market_data_fetcher"] if "market_data_fetcher" in self.components else None,
                     config=market_scan_config,
                     regime_detector=regime_detector
                 )

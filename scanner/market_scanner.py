@@ -214,18 +214,33 @@ class MarketScanner:
         for ticker in tickers:
             try:
                 symbol = ticker.get("instId", "")
-                vol_ccy = float(ticker.get("volCcy", 0))  # 24h 成交量
+                # vol_ccy = float(ticker.get("volCcy", 0))  # 24h 成交量
                 last_price = float(ticker.get("last", 0))  # 最新价
                 open_24h = float(ticker.get("open24h", 0))  # 24h 开盘价
-
+                # self.logger.info(
+                #     f"Symbol: {symbol} | Raw VolCcy: {ticker.get('volCcy')} | Raw VolCcy24h: {ticker.get('volCcy24h')} | Last: {ticker.get('last')}")
                 # 计算 24h 成交额（USDT）
-                volume_24h = vol_ccy * last_price
-
+                volume_24h = float(ticker.get("volCcy24h", 0))*last_price
+                # print("marketscanner debug:24小时成交额")
+                # print(volume_24h)
                 # 计算涨跌幅
                 price_change_24h = 0.0
                 if open_24h > 0:
                     price_change_24h = ((last_price - open_24h) / open_24h) * 100
+                    # 汇报每一个币种的筛选过程 (满足你的汇报需求)
+                self.logger.info(
+                    f"🔍 [初筛] {symbol} | 成交额: {volume_24h:,.0f} USDT | 涨跌幅: {price_change_24h:.2f}%")
+                if volume_24h < self.min_volume_24h:
+                    self.logger.info(f"   ❌ 淘汰: 成交额低于门槛 ({self.min_volume_24h})")
+                    continue
 
+                if abs(price_change_24h) < self.min_price_change:
+                    self.logger.info(f"   ❌ 淘汰: 涨跌幅波动不足 ({self.min_price_change}%)")
+                    continue
+
+                if abs(price_change_24h) > self.max_price_change:
+                    self.logger.info(f"   ❌ 淘汰: 涨跌幅过激, 风险过高")
+                    continue
                 # 筛选条件
                 if volume_24h >= self.min_volume_24h:
                     if abs(price_change_24h) >= self.min_price_change:

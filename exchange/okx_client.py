@@ -233,25 +233,36 @@ class OKXClient:
             params["instId"] = inst_id
         return await self._request("GET", "/api/v5/trade/orders-pending", params=params)
 
-    async def cancel_all_orders(self):
-        """撤销所有挂单"""
+    # 在 exchange/okx_client.py 中修改
+    async def cancel_all_orders(self, inst_id: str = None):
+        """撤销所有挂单，可选指定产品 ID"""
         self.logger.info("正在撤销所有挂单...")
         try:
-            # 获取所有未成交订单
-            pending = await self._request("GET", "/api/v5/trade/orders-pending", params={"instType": "SWAP"})
+            # 获取所有未成交订单，可以根据 inst_id 过滤
+            params = {"instType": "SWAP"}
+            if inst_id:
+                params["instId"] = inst_id
+
+            pending = await self._request("GET", "/api/v5/trade/orders-pending", params=params)
             if not pending:
                 self.logger.info("✅ 当前无挂单")
-                return
+                return []
 
+            results = []
             for order in pending:
-                inst_id = order.get("instId")
+                target_inst = order.get("instId")
                 ord_id = order.get("ordId")
-                self.logger.info(f"撤销订单: {inst_id} (ID: {ord_id})")
+                self.logger.info(f"撤销订单: {target_inst} (ID: {ord_id})")
 
-                await self.client._request("POST", "/api/v5/trade/cancel-order", data={
-                    "instId": inst_id,
+                # 修复：直接调用 self._request 而不是 self.client._request
+                res = await self._request("POST", "/api/v5/trade/cancel-order", data={
+                    "instId": target_inst,
                     "ordId": ord_id
                 })
+                if res:
+                    results.extend(res)
+            return results
 
         except Exception as e:
             self.logger.error(f"❌ 撤单异常: {e}")
+            return []
