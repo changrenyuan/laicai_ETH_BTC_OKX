@@ -77,7 +77,7 @@ class QuantEngine:
             await scheduler.run()
 
             # Phase 7-8: Runtime - 启动状态机 & 主循环
-            self.runtime = Runtime(self.components, self.strategy)
+            self.runtime = Runtime(self.components, self.strategy, self.config)
             await self.runtime.run()
 
         except Exception as e:

@@ -13,6 +13,9 @@ import numpy as np
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+from strategy.indicators import normalize_klines, calculate_atr
+from strategy.regime_detector import RegimeAnalysis
+
 logger = logging.getLogger(__name__)
 
 
@@ -277,22 +280,15 @@ class MarketScanner:
                     self.logger.warning(f"{symbol} K 线数据不足，跳过")
                     continue
 
-                # 计算技术指标
-                indicators = self._calculate_indicators(klines)
-
-                if not indicators:
-                    self.logger.warning(f"{symbol} 计算技术指标失败，跳过")
-                    continue
-
-                # 使用 Regime Detector 判断市场环境
-                regime_analysis = self.regime_detector.analyze(symbol, klines)
+                # 使用 Regime Detector 判断市场环境（这会计算所有技术指标）
+                regime_analysis: RegimeAnalysis = self.regime_detector.analyze(symbol, klines)
 
                 if not regime_analysis:
                     self.logger.warning(f"{symbol} 市场环境分析失败，跳过")
                     continue
 
                 # 计算综合评分
-                score = self._calculate_score(ticker, indicators, regime_analysis)
+                score = self._calculate_score(ticker, regime_analysis)
 
                 candidate = ScanResult(
                     symbol=symbol,
@@ -317,47 +313,7 @@ class MarketScanner:
 
         return candidates
 
-    def _calculate_indicators(self, klines: List[Dict]) -> Optional[Dict]:
-        """
-        计算技术指标
-
-        Args:
-            klines: K 线数据
-
-        Returns:
-            Dict: 技术指标字典
-        """
-        try:
-            df = pd.DataFrame(klines)
-            df.columns = ["timestamp", "open", "high", "low", "close", "volume", "vol_ccy", "vol_ccy_quote", "confirm"]
-
-            for col in ["open", "high", "low", "close", "volume"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-            latest = df.iloc[-1]
-            recent = df.tail(20)
-
-            # ATR
-            high_low = df["high"] - df["low"]
-            high_close = np.abs(df["high"] - df["close"].shift())
-            low_close = np.abs(df["low"] - df["close"].shift())
-            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-            atr = true_range.rolling(window=14).mean().iloc[-1]
-
-            # 波动率扩张
-            atr_expansion = atr / recent["close"].std() if recent["close"].std() > 0 else 1.0
-
-            return {
-                "atr": atr,
-                "atr_expansion": atr_expansion,
-                "volume": latest["volume"],
-            }
-
-        except Exception as e:
-            self.logger.error(f"计算技术指标失败: {e}")
-            return None
-
-    def _calculate_score(self, ticker: Dict, indicators: Dict, regime_analysis) -> float:
+    def _calculate_score(self, ticker: Dict, regime_analysis: RegimeAnalysis) -> float:
         """
         计算综合评分
 
@@ -369,7 +325,6 @@ class MarketScanner:
 
         Args:
             ticker: Ticker 数据
-            indicators: 技术指标
             regime_analysis: 市场环境分析结果
 
         Returns:
