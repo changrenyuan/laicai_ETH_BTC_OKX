@@ -164,11 +164,13 @@ class Runtime:
                             pnl=float(p.get("upl", 0))
                         )
 
-                # 清理已平仓的持仓 (可选，但为了保持数据一致性建议清理)
-                # 这里简单处理：如果 Context 中的 symbol 不在 valid_symbols 中，清空
+                # 清理已平仓的持仓
                 for symbol in list(self.context.positions.keys()):
                     if symbol not in valid_symbols:
                         # 创建空持仓
+                        old_quantity = self.context.positions[symbol].quantity
+                        if old_quantity != 0:
+                            Dashboard.log(f"🔄 [Sync] 清理已平仓持仓: {symbol} ({old_quantity} -> 0)", "DEBUG")
                         self.context.update_position(
                             symbol=symbol,
                             quantity=0,
@@ -296,6 +298,15 @@ class Runtime:
 
                     # 只处理TREND环境
                     if regime != "TREND":
+                        continue
+
+                    # 🔥🔥【关键修复】检查平仓冷却期（防止频繁开平仓）🔥🔥
+                    cooldown_period = 180  # 3分钟冷却（更灵活）
+                    last_close_time = self.context.symbol_cooldown.get(symbol, 0)
+
+                    if (time.time() - last_close_time) < cooldown_period:
+                        remaining = int(cooldown_period - (time.time() - last_close_time))
+                        Dashboard.log(f"⏳ {symbol} 处于冷却期（剩余 {remaining} 秒），跳过开仓", "DEBUG")
                         continue
 
                     # 🔥🔥【优化】加仓冷却检查 🔥🔥
@@ -617,6 +628,23 @@ class Runtime:
             # 7. 结果处理
             if result["success"]:
                 Dashboard.log(f"✅ [Execution] 订单提交成功", "SUCCESS")
+
+                # 🔥 记录开仓时间（用于最小持仓时间检查）
+                if not reduce_only:
+                    self.context.symbol_entry_time[symbol] = time.time()
+                    Dashboard.log(f"📝 [开仓] {symbol} 开仓成功，记录时间", "DEBUG")
+
+                # 🔥 关键修复：如果是平仓单，成功后立即同步持仓
+                # 防止 Context 数据过时，导致重复生成离场信号
+                if reduce_only:
+                    # 记录冷却时间（防止立即重新开仓）
+                    self.context.symbol_cooldown[symbol] = time.time()
+                    cooldown_minutes = 3  # 冷却3分钟
+                    Dashboard.log(f"🧊 [冷却] {symbol} 平仓成功，进入 {cooldown_minutes} 分钟冷却期", "INFO")
+
+                    Dashboard.log("🔄 [Sync] 平仓成功，立即同步持仓...", "DEBUG")
+                    await asyncio.sleep(1)  # 等待 1 秒确保交易所更新
+                    await self._sync_positions()
             else:
                 # 👇 这里现在能打印出真正的错误了
                 error_detail = result.get('error_msg', 'Unknown')
@@ -763,6 +791,25 @@ class Runtime:
                 fresh_pos = self.context.get_position(symbol)
                 if not fresh_pos or float(fresh_pos.quantity) == 0:
                     Dashboard.log(f"⏳ {symbol} 持仓已清空，跳过评估", "DEBUG")
+                    continue
+
+                # 🔥 关键修复：从交易所实时验证持仓（双重保险）
+                # 防止 Context 与交易所不一致
+                try:
+                    real_positions = await self.client.get_positions()
+                    has_real_position = False
+                    for rp in real_positions:
+                        if rp.get("instId") == symbol and float(rp.get("pos", 0)) != 0:
+                            has_real_position = True
+                            break
+
+                    if not has_real_position:
+                        Dashboard.log(f"⚠️ {symbol} 交易所无持仓，强制更新 Context", "WARNING")
+                        self.context.update_position(symbol=symbol, quantity=0, avg_price=0, pnl=0)
+                        continue
+                except Exception as e:
+                    logger.error(f"验证持仓失败: {e}")
+                    # 如果验证失败，为了安全，跳过
                     continue
 
                 # 调用策略评估 (使用上一轮更新过的 evaluate_position，含趋势检测)

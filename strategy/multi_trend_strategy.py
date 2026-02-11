@@ -17,6 +17,7 @@
 """
 
 import logging
+import time
 from typing import Dict, Optional
 from datetime import datetime
 
@@ -99,17 +100,25 @@ class MultiTrendStrategy(BaseStrategy):
             curr_ema50 = ema50.iloc[-1]
             curr_adx = adx_series.iloc[-1]
 
-            # 判断趋势
-            # 做多：EMA20 > EMA50, 价格 > EMA20, ADX > 25
-            is_uptrend = curr_ema20 > curr_ema50 and curr_price > curr_ema20 and curr_adx > self.adx_threshold
+            # 🔥 关键修复：引入滞后阈值（Hysteresis）防止震荡市频繁开平仓
+            # 计算EMA差距百分比
+            ema_gap_pct = (curr_ema20 - curr_ema50) / curr_ema50 if curr_ema50 != 0 else 0
 
-            # 做空：EMA20 < EMA50, 价格 < EMA20, ADX > 25
-            is_downtrend = curr_ema20 < curr_ema50 and curr_price < curr_ema20 and curr_adx > self.adx_threshold
+            # 开仓条件：需要 0.1% 的明确趋势余量
+            # 做多：EMA20 必须超过 EMA50 0.1%，价格 > EMA20, ADX > 25
+            is_uptrend = ema_gap_pct > 0.001 and curr_price > curr_ema20 and curr_adx > self.adx_threshold
+
+            # 做空：EMA20 必须低于 EMA50 0.1%，价格 < EMA20, ADX > 25
+            is_downtrend = ema_gap_pct < -0.001 and curr_price < curr_ema20 and curr_adx > self.adx_threshold
+
+            # 调试日志
+            self.logger.info(f"🔍 [趋势判断] {symbol} EMA20={curr_ema20:.6f} EMA50={curr_ema50:.6f} 差距={ema_gap_pct:.4%} ADX={curr_adx:.1f}")
 
             if not (is_uptrend or is_downtrend):
                 return None
 
             side = "buy" if is_uptrend else "sell"
+            reason = f"Trend (EMA差距={ema_gap_pct:.3%}, ADX={curr_adx:.1f})"
 
             # ✅ 修复：使用实时价格而非 K 线收盘价计算止损止盈
             try:
@@ -234,7 +243,7 @@ class MultiTrendStrategy(BaseStrategy):
                 "leverage": self.leverage,
                 "stop_loss": stop_loss_price,
                 "take_profit": take_profit_price,
-                "reason": f"Trend (ADX={curr_adx:.1f})"
+                "reason": reason  # 🔥 使用包含 EMA 差距的详细原因
             }
 
         except Exception as e:
