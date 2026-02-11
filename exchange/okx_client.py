@@ -162,7 +162,45 @@ class OKXClient:
         """获取某类产品的所有行情"""
         return await self._request("GET", "/api/v5/market/tickers", params={"instType": instType})
 
-        # ... (保留原有 __init__, connect, _request 等方法) ...
+    # 🔥🔥🔥 【增强】单笔下单接口 (返回详细错误信息) 🔥🔥🔥
+    async def place_order(self, order_data: dict) -> tuple[bool, str, str]:
+        """
+        提交单笔订单 (返回详细结果)
+        :param order_data: 订单参数字典 (instId, side, sz, ordType, px...)
+        :return: (is_success, order_id, error_message)
+        """
+        try:
+            # 确保有交易模式，默认为全仓
+            if "tdMode" not in order_data:
+                order_data["tdMode"] = "cross"
+
+            self.logger.info(f"⚡ 提交API请求: {order_data.get('instId')} {order_data.get('side')} (posSide={order_data.get('posSide')})")
+
+            # 调用 API
+            data_list = await self._request("POST", "/api/v5/trade/order", data=order_data)
+
+            if data_list and len(data_list) > 0:
+                result = data_list[0]
+                s_code = result.get("sCode")
+                s_msg = result.get("sMsg")
+
+                # sCode = "0" 代表成功
+                if s_code == "0":
+                    order_id = result.get("ordId")
+                    self.logger.info(f"✅ API下单成功: ID={order_id}")
+                    return True, order_id, ""
+                else:
+                    # 🛑 捕获业务错误 (如余额不足、参数错误)
+                    error_msg = f"{s_msg} (代码: {s_code})"
+                    self.logger.error(f"❌ API业务拒绝: {error_msg}")
+                    return False, "", error_msg
+            else:
+                return False, "", "API返回空数据"
+
+        except Exception as e:
+            error_text = str(e)
+            self.logger.error(f"❌ API网络/系统异常: {error_text}")
+            return False, "", error_text
 
     # 🔥 新增：批量下单 (Batch Orders)
     async def place_batch_orders(self, orders_data: list) -> list:

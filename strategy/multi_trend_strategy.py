@@ -111,9 +111,47 @@ class MultiTrendStrategy(BaseStrategy):
 
             side = "buy" if is_uptrend else "sell"
 
+            # ✅ 修复：使用实时价格而非 K 线收盘价计算止损止盈
+            try:
+                ticker = await self.om.client.get_ticker(symbol)
+                if ticker:
+                    # 兼容处理：如果返回是 list，取第一个元素；如果是 dict，直接使用
+                    if isinstance(ticker, list) and len(ticker) > 0:
+                        ticker_data = ticker[0]
+                    elif isinstance(ticker, dict):
+                        ticker_data = ticker
+                    else:
+                        ticker_data = {}
+
+                    real_time_price = float(ticker_data.get("last", 0))
+                    if real_time_price > 0:
+                        curr_price = real_time_price
+                        self.logger.info(f"✅ [价格更新] 使用实时价格: {curr_price:.6f}")
+                    else:
+                        self.logger.warning(f"⚠️ [价格异常] 实时价格为0，使用K线收盘价: {curr_price:.6f}")
+                else:
+                    self.logger.warning(f"⚠️ [价格异常] 无法获取实时价格，使用K线收盘价: {curr_price:.6f}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ [价格异常] 获取实时价格失败 ({e})，使用K线收盘价: {curr_price:.6f}")
+
+            # 🔍 调试：打印止损比例
+            self.logger.info(f"🔍 [Debug] side={side}, curr_price={curr_price:.6f}, stop_loss_pct={self.stop_loss_pct}, take_profit_pct={self.take_profit_pct}")
+
+            # 确保止损比例是正数
+            if self.stop_loss_pct < 0:
+                self.logger.warning(f"⚠️ [止损比例异常] stop_loss_pct 为负数: {self.stop_loss_pct}，强制使用 0.03")
+                self.stop_loss_pct = abs(self.stop_loss_pct) if abs(self.stop_loss_pct) > 0 else 0.03
+
             # 计算止盈止损
+            # 做多：止损 = 价格 × (1 - 止损%)
+            # 做空：止损 = 价格 × (1 + 止损%)
             stop_loss_price = curr_price * (1 + self.stop_loss_pct) if side == "sell" else curr_price * (1 - self.stop_loss_pct)
+            # 做多：止盈 = 价格 × (1 + 止盈%)
+            # 做空：止盈 = 价格 × (1 - 止盈%)
             take_profit_price = curr_price * (1 - self.take_profit_pct) if side == "sell" else curr_price * (1 + self.take_profit_pct)
+
+            # 🔍 调试：打印计算后的止损止盈价格
+            self.logger.info(f"🔍 [Debug] stop_loss_price={stop_loss_price:.6f}, take_profit_price={take_profit_price:.6f}")
 
             # 计算仓位大小
             # 单个仓位风险 = 总资金 * 风险比例
@@ -121,7 +159,70 @@ class MultiTrendStrategy(BaseStrategy):
 
             # 仓位大小 = 风险金额 / 止损距离
             stop_distance = abs(stop_loss_price - curr_price)
-            position_size = risk_amount / stop_distance
+            raw_position_size = risk_amount / stop_distance
+
+            # --- 🔥 智能取整逻辑 (Smart Rounding) ---
+
+            # 1. 针对合约 (SWAP/FUTURES) 必须取整
+            # 假设 1 张合约 = 1 个币 (大部分币种适用，如 BTC/ETH/RIVER)
+            # 某些币种如 DOGE 可能是 1张=100币，这里简化处理，如有需要需查询 ctVal
+
+            target_sz = int(raw_position_size)
+
+            # 2. 如果算出来是 0 张 (例如 0.74 张)
+            if target_sz < 1:
+                # 检查: 1张合约到底多少钱?
+                contract_value = curr_price * 1.0  # 假设面值=1
+                required_margin = contract_value / self.leverage
+
+                # 获取当前可用余额 (预估)
+                # 如果没有余额信息，就用 total_capital 估算
+                estimated_balance = self.total_capital
+
+                # 💡 判定:
+                # A. 余额够不够付保证金? (余额 > 1张的保证金)
+                # B. 风险能不能承受? (1张的潜在亏损 < 2倍的预设风控) -> 允许稍微超一点风险
+
+                one_contract_risk = stop_distance * 1.0
+
+                if estimated_balance > required_margin:
+                    # 如果风险不是太离谱 (例如 1张的亏损不超过 2.5U，即允许风险放大到 ~6%)
+                    # 原定风险 0.8U。如果买1张亏 1.5U，对于40U本金还在可接受范围
+                    if one_contract_risk < (self.total_capital * 0.08):
+                        self.logger.info(f"⚠️ {symbol} 原始仓位 {raw_position_size:.2f} 不足1张，强制升级为 1 张")
+                        target_sz = 1
+                    else:
+                        self.logger.warning(f"🚫 {symbol} 1张风险过大 ({one_contract_risk:.2f}U)，放弃交易")
+                        return None
+                else:
+                    self.logger.warning(f"🚫 {symbol} 余额不足以支付1张保证金，放弃")
+                    return None
+
+            position_size = target_sz
+
+            # 计算订单价值和保证金
+            order_value = curr_price * position_size
+            margin = order_value / self.leverage
+
+            # 打印详细的资金计算信息
+            self.logger.info("=" * 80)
+            self.logger.info("💰 [资金计算] 仓位信息")
+            self.logger.info("-" * 80)
+            self.logger.info(f"总资金:      {self.total_capital:.2f} USDT")
+            self.logger.info(f"风险比例:    {self.risk_per_position:.2%}")
+            self.logger.info(f"单笔风险:    {risk_amount:.4f} USDT")
+            self.logger.info(f"止损幅度:    {self.stop_loss_pct:.2%}")
+            self.logger.info(f"止损距离:    {stop_distance:.6f} USDT")
+            self.logger.info("-" * 80)
+            self.logger.info(f"当前价格:    {curr_price:.6f} USDT")
+            self.logger.info(f"仓位大小:    {position_size:.6f}")
+            self.logger.info(f"订单价值:    {order_value:.2f} USDT")
+            self.logger.info(f"杠杆倍数:    {self.leverage}x")
+            self.logger.info(f"保证金占用:  {margin:.2f} USDT")
+            self.logger.info("-" * 80)
+            self.logger.info(f"预计最多开仓数: {int(self.total_capital / margin)} 单")
+            self.logger.info(f"当前配置最大仓位: {self.max_positions} 单")
+            self.logger.info("=" * 80)
 
             self.logger.info(f"🎯 [趋势信号] {symbol} {side} 价格={curr_price:.4f} ADX={curr_adx:.1f}")
 
@@ -144,80 +245,125 @@ class MultiTrendStrategy(BaseStrategy):
 
     async def evaluate_position(self, symbol: str) -> Dict:
         """
-        评估持仓表现 - 供Scheduler调用
-
-        Args:
-            symbol: 交易对
-
-        Returns:
-            {
-                "action": "hold" | "close",
-                "reason": "原因说明",
-                "pnl_pct": 0.05,
-                "should_rebalance": bool
-            }
+        评估持仓表现 (增强版：加入趋势反转检测)
+        供 Scheduler 定时调用 (默认每15分钟)
         """
         try:
-            # 获取当前持仓
+            # 1. 获取当前持仓
             pos = self.context.get_position(symbol)
             if not pos or float(pos.quantity) == 0:
                 return {"action": "hold", "reason": "无持仓", "should_rebalance": False}
 
-            # 获取当前价格
+            # 2. 获取实时行情
             ticker = await self.om.client.get_ticker(symbol)
             if not ticker:
                 return {"action": "hold", "reason": "无法获取价格", "should_rebalance": False}
 
-            curr_price = float(ticker.get("last", 0))
+            # 兼容处理 Ticker 格式
+            t_data = ticker[0] if isinstance(ticker, list) else ticker
+            curr_price = float(t_data.get("last", 0))
+
             if curr_price == 0:
                 return {"action": "hold", "reason": "价格无效", "should_rebalance": False}
 
-            # 计算盈亏
-            entry_price = float(pos.avg_price) if pos.avg_price else 0
+            # 3. 计算盈亏 (PnL)
+            entry_price = float(pos.entry_price) if pos.entry_price else 0
             quantity = float(pos.quantity)
 
-            if quantity > 0:  # 做多
+            # 确定持仓方向
+            is_long = quantity > 0
+
+            if is_long:
                 pnl_pct = (curr_price - entry_price) / entry_price
-            else:  # 做空
+            else:
                 pnl_pct = (entry_price - curr_price) / entry_price
 
-            # 止损检查
+            # --- A. 硬性止盈止损检查 (优先级最高) ---
             if pnl_pct <= -self.stop_loss_pct:
                 return {
                     "action": "close",
-                    "reason": f"止损触发 (盈亏: {pnl_pct:.2%})",
+                    "reason": f"🛑 止损触发 (当前: {pnl_pct:.2%}, 阈值: -{self.stop_loss_pct:.2%})",
                     "pnl_pct": pnl_pct,
                     "should_rebalance": True
                 }
 
-            # 止盈检查
             if pnl_pct >= self.take_profit_pct:
                 return {
                     "action": "close",
-                    "reason": f"止盈触发 (盈亏: {pnl_pct:.2%})",
+                    "reason": f"🎉 止盈触发 (当前: {pnl_pct:.2%}, 阈值: {self.take_profit_pct:.2%})",
                     "pnl_pct": pnl_pct,
                     "should_rebalance": True
                 }
 
-            # 评估：如果盈利不足且亏损扩大，建议换仓
+            # --- B. 趋势健康度检查 (关键新增逻辑) ---
+            # 重新获取 K 线，判断趋势是否已经反转
+            try:
+                klines = await self.om.client.get_candlesticks(symbol, bar=self.trend_period, limit=50)
+                if klines and len(klines) >= 50:
+                    df = indicators.normalize_klines(klines)
+                    ema20 = indicators.calculate_ema(df, 20).iloc[-1]
+                    ema50 = indicators.calculate_ema(df, 50).iloc[-1]
+
+                    # 💡 逻辑 1: 均线反转 (Death Cross)
+                    # 如果做多，但 EMA20 跌破 EMA50，说明趋势变成空头 -> 平仓
+                    if is_long and ema20 < ema50:
+                        return {
+                            "action": "close",
+                            "reason": f"📉 趋势反转: EMA20死叉EMA50 (价格: {curr_price:.4f})",
+                            "pnl_pct": pnl_pct,
+                            "should_rebalance": True
+                        }
+                    # 如果做空，但 EMA20 突破 EMA50，说明趋势变成多头 -> 平仓
+                    elif not is_long and ema20 > ema50:
+                        return {
+                            "action": "close",
+                            "reason": f"📈 趋势反转: EMA20金叉EMA50 (价格: {curr_price:.4f})",
+                            "pnl_pct": pnl_pct,
+                            "should_rebalance": True
+                        }
+
+                    # 💡 逻辑 2: 价格跌破关键均线 (弱势离场)
+                    # 如果做多，价格跌破 EMA50，即使没到止损也先跑
+                    if is_long and curr_price < ema50:
+                         return {
+                            "action": "close",
+                            "reason": f"🏃 跌破趋势线: 价格({curr_price:.4f}) < EMA50({ema50:.4f})",
+                            "pnl_pct": pnl_pct,
+                            "should_rebalance": True
+                        }
+                    # 如果做空，价格站上 EMA50
+                    elif not is_long and curr_price > ema50:
+                        return {
+                            "action": "close",
+                            "reason": f"🏃 突破趋势线: 价格({curr_price:.4f}) > EMA50({ema50:.4f})",
+                            "pnl_pct": pnl_pct,
+                            "should_rebalance": True
+                        }
+
+            except Exception as e:
+                self.logger.warning(f"⚠️ 趋势检查失败，仅依赖PnL: {e}")
+
+            # --- C. 滞涨检查 (可选) ---
+            # 如果持仓很久但这期间微亏且趋势不明显，可以考虑换仓
             if pnl_pct < self.min_profit_threshold and pnl_pct < -0.005:
                 return {
                     "action": "close",
-                    "reason": f"盈利不足且趋势反转 (盈亏: {pnl_pct:.2%})",
+                    "reason": f"盈利不足且趋势不明 (盈亏: {pnl_pct:.2%})",
                     "pnl_pct": pnl_pct,
                     "should_rebalance": True
                 }
 
-            # 持有
             return {
                 "action": "hold",
-                "reason": f"正常持有 (盈亏: {pnl_pct:.2%})",
+                "reason": f"持仓正常 (盈亏: {pnl_pct:.2%})",
                 "pnl_pct": pnl_pct,
                 "should_rebalance": False
             }
 
         except Exception as e:
             self.logger.error(f"❌ 评估持仓 {symbol} 失败: {e}")
+            import traceback
+            traceback.print_exc()
             return {"action": "hold", "reason": f"评估失败: {str(e)}", "should_rebalance": False}
 
     async def run_tick(self):

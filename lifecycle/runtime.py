@@ -72,67 +72,65 @@ class Runtime:
             Dashboard.log(f"⚠️ 状态机已在运行: {sm.get_current_state().value}", "WARNING")
 
     async def _main_loop(self):
-        """
-        主循环：严格执行完整流程
-        【8】市场扫描 → 【9】Regime 检测 → 【10】策略判断 → 【11】风控审批 → 【12】执行 → 【13】更新 Context → 【14】Analytics
-        """
-        Dashboard.log("⭐⭐⭐ 引擎启动完成，进入主循环 ⭐⭐⭐", "SUCCESS")
+        """主循环：增加持仓同步步骤"""
+        Dashboard.log("⭐⭐⭐ 引擎启动完成，进入主循环 (实时监控模式) ⭐⭐⭐", "SUCCESS")
         print("-" * 80)
 
-        last_heartbeat = 0
-        heartbeat_intv = 5
+        last_status_print = 0
+        status_print_intv = 10
+
+        last_position_check = 0
+        position_check_intv = 10
+
+        # 新增：持仓同步时间控制
+        last_sync_time = 0
+        sync_interval = 5  # 每5秒同步一次持仓 (防止无限加仓的关键!)
 
         while self.is_running:
             try:
                 now = time.time()
 
-                # --- 全局风控检查 ---
+                # --- 0. 同步交易所持仓 (关键新增!) ---
+                # 每次做决策前，必须先看一眼自己兜里到底有啥
+                if now - last_sync_time > sync_interval:
+                    await self._sync_positions()
+                    last_sync_time = now
+
+                # --- 1. 全局风控 ---
                 if not await self._global_risk_check():
                     await asyncio.sleep(5)
                     continue
 
-                # --- 【8】市场扫描 (Scanner) ---
+                # --- 2. 市场扫描 ---
                 scan_results = []
                 market_scan_enabled = self.market_scan_config.get("enabled", False)
-                # print(market_scan_enabled)
                 if market_scan_enabled and (now - self.last_scan_time > self.scan_interval):
                     scan_results = await self._market_scan()
                     self.last_scan_time = now
 
-                # --- 【9】市场环境检测 (Regime Detection) ---
+                # --- 3. 市场环境 ---
                 if scan_results:
                     await self._regime_detection(scan_results)
 
-                # --- 【10】策略判断 (Strategy) ---
-                # 只有在监控状态下才接受新信号
+                # --- 4. 策略逻辑 ---
                 if self.state_machine.get_current_state() == SystemState.MONITORING:
-                    signals = await self._strategy_analysis()
 
-                    if signals:
-                        for signal in signals:
-                            # --- 【11】风控审批 (Risk Approval) ---
-                            approval = await self._risk_approval(signal)
+                    # A. 入场
+                    entry_signals = await self._strategy_analysis()
+                    for signal in entry_signals:
+                        await self._process_signal(signal)
 
-                            if approval.get("approved", False):
-                                # --- 【12】执行 (Execution) ---
-                                execution_result = await self._execute_trade(signal, approval)
+                    # B. 离场
+                    if now - last_position_check > position_check_intv:
+                        exit_signals = await self._manage_positions()
+                        for signal in exit_signals:
+                            await self._process_signal(signal)
+                        last_position_check = now
 
-                                # --- 【13】更新 Context ---
-                                await self._update_context(signal, execution_result)
-
-                                # --- 【14】Analytics (分析) ---
-                                await self._analytics(signal, execution_result)
-
-                                # --- 恢复状态 ---
-                                if not self.state_machine.is_in_state(SystemState.ERROR):
-                                    await self.state_machine.transition_to(SystemState.MONITORING, reason="交易完成")
-                            else:
-                                Dashboard.log(f"🛡️ [风控] 拒绝交易: {approval.get('reason')}", "WARNING")
-
-                # 心跳维持
-                if now - last_heartbeat > heartbeat_intv:
-                    self._print_heartbeat()
-                    last_heartbeat = now
+                # --- 5. 打印状态 ---
+                if now - last_status_print > status_print_intv:
+                    await self._print_account_status()
+                    last_status_print = now
 
                 await asyncio.sleep(1)
 
@@ -140,6 +138,49 @@ class Runtime:
                 Dashboard.log(f"主循环异常: {e}", "ERROR")
                 logger.error(traceback.format_exc())
                 await asyncio.sleep(5)
+
+    async def _sync_positions(self):
+        """从交易所同步最新持仓到 Context (防止无限加仓的关键!)"""
+        try:
+            # 调用 client 获取持仓
+            positions_data = await self.client.get_positions()
+
+            if positions_data:
+                valid_symbols = set()
+
+                for p in positions_data:
+                    symbol = p.get("instId")
+                    quantity = float(p.get("pos", 0))
+
+                    # 只记录有持仓的
+                    if quantity != 0:
+                        valid_symbols.add(symbol)
+
+                        # 更新 Context
+                        self.context.update_position(
+                            symbol=symbol,
+                            quantity=quantity,
+                            avg_price=float(p.get("avgPx", 0)),
+                            pnl=float(p.get("upl", 0))
+                        )
+
+                # 清理已平仓的持仓 (可选，但为了保持数据一致性建议清理)
+                # 这里简单处理：如果 Context 中的 symbol 不在 valid_symbols 中，清空
+                for symbol in list(self.context.positions.keys()):
+                    if symbol not in valid_symbols:
+                        # 创建空持仓
+                        self.context.update_position(
+                            symbol=symbol,
+                            quantity=0,
+                            avg_price=0,
+                            pnl=0
+                        )
+
+                # Dashboard.log(f"🔄 [Sync] 持仓已同步: {len(valid_symbols)} 个活跃持仓", "DEBUG")
+
+        except Exception as e:
+            logger.error(f"持仓同步失败: {e}")
+            # 暂时忽略网络错误，等待下一次同步
 
     async def _global_risk_check(self) -> bool:
         """全局风险检查"""
@@ -225,6 +266,7 @@ class Runtime:
         【10】策略判断 (Strategy)
         - 根据市场环境生成策略信号
         - 返回信号列表
+        - 🔥 新增：支持加仓（冷却时间机制）
 
         注意：这里支持多策略模式：
         1. 如果是multi_trend策略，遍历所有扫描结果生成信号
@@ -256,10 +298,37 @@ class Runtime:
                     if regime != "TREND":
                         continue
 
+                    # 🔥🔥【优化】加仓冷却检查 🔥🔥
+                    # 不再因为有持仓就 continue 跳过，而是检查时间间隔
+                    current_pos = self.context.get_position(symbol)
+
+                    if current_pos and float(current_pos.quantity) != 0:
+                        # 检查是否有最近的交易记录（使用 context.last_trade_time）
+                        # 或者可以使用更精细的 per_symbol_cooldown 机制
+                        last_trade_time = getattr(self.context, 'last_trade_time', 0)
+                        cooldown_period = 900  # 15分钟冷却
+
+                        if (time.time() - last_trade_time) < cooldown_period:
+                            # Dashboard.log(f"⏳ {symbol} 处于加仓冷却期 (15min)，跳过", "DEBUG")
+                            continue
+                        else:
+                            Dashboard.log(f"➕ {symbol} 触发加仓逻辑 (冷却期已过)", "INFO")
+
                     # 调用MultiTrendStrategy的generate_trend_signal方法
                     signal = await multi_trend_strategy.generate_trend_signal(symbol)
 
                     if signal:
+                        # 🔥 新增：检查信号方向是否与持仓方向一致（避免趋势反转时同时开反向单）
+                        current_pos = self.context.get_position(symbol)
+                        if current_pos and float(current_pos.quantity) != 0:
+                            current_is_long = float(current_pos.quantity) > 0
+                            signal_is_long = signal.get("side") == "buy"
+
+                            # 如果方向相反，跳过此信号（让离场逻辑处理平仓）
+                            if current_is_long != signal_is_long:
+                                Dashboard.log(f"⏳ {symbol} 趋势反转检测到，但与持仓方向相反，等待平仓", "DEBUG")
+                                continue
+
                         # 注入regime信息
                         signal['regime'] = regime
                         signal['strategy'] = 'multi_trend'
@@ -352,58 +421,84 @@ class Runtime:
         - 调用 OrderManager 执行下单
         - 返回执行结果
         """
-        # 1. 信号验证
-        if not signal:
-            Dashboard.log(f"❌ [审计] signal 为空", "ERROR")
-            return {"success": False, "error": "No signal"}
+        Dashboard.log(f"🔍 [Debug] _execute_trade 被调用，signal 类型: {type(signal)}", "DEBUG")
 
-        if not isinstance(signal, dict):
-            Dashboard.log(f"❌ [审计] signal 类型错误: {type(signal)}，期望 dict", "ERROR")
-            Dashboard.log(f"❌ [审计] signal 内容: {signal}", "ERROR")
-            return {"success": False, "error": f"Invalid signal type: {type(signal)}"}
-
-        symbol = signal.get("symbol")
-        side = signal.get("side")
-
-        if not symbol or not side:
-            Dashboard.log(f"❌ [审计] signal 缺少必要字段: symbol={symbol}, side={side}", "ERROR")
-            return {"success": False, "error": "Missing required fields in signal"}
-
-        # ✅ 修复: 增加 await
-        await self.state_machine.transition_to(SystemState.OPENING_POSITION)
-        Dashboard.log(f"⚡ [Execution] 开始执行: {symbol} {side}", "INFO")
-
-        result = {"success": False, "error": "Unknown"}
+        # 初始化默认结果，防止异常时 result 未定义
+        result = {"success": False, "error": "Unknown error"}
 
         try:
+            # 1. 信号验证
+            if not signal:
+                Dashboard.log(f"❌ [审计] signal 为空", "ERROR")
+                result = {"success": False, "error": "No signal"}
+                return result
+
+            if not isinstance(signal, dict):
+                Dashboard.log(f"❌ [审计] signal 类型错误: {type(signal)}，期望 dict", "ERROR")
+                Dashboard.log(f"❌ [审计] signal 内容: {signal}", "ERROR")
+                result = {"success": False, "error": f"Invalid signal type: {type(signal)}"}
+                return result
+
+            Dashboard.log(f"✅ [Debug] signal 类型检查通过，开始提取字段", "DEBUG")
+
+            symbol = signal.get("symbol")
+            side = signal.get("side")
+
+            if not symbol or not side:
+                Dashboard.log(f"❌ [审计] signal 缺少必要字段: symbol={symbol}, side={side}", "ERROR")
+                result = {"success": False, "error": "Missing required fields in signal"}
+                return result
+
+            # ✅ 修复: 增加 await
+            await self.state_machine.transition_to(SystemState.OPENING_POSITION)
+            Dashboard.log(f"⚡ [Execution] 开始执行: {symbol} {side}", "INFO")
+
             # 2. 提取参数（带安全检查）
             size_value = signal.get("size")
             if size_value is None:
                 Dashboard.log(f"❌ [审计] signal 缺少 size 字段", "ERROR")
-                return {"success": False, "error": "Missing size in signal"}
+                result = {"success": False, "error": "Missing size in signal"}
+                return result
 
             try:
                 size = float(size_value)
             except (ValueError, TypeError) as e:
                 Dashboard.log(f"❌ [审计] size 值无效: {size_value}, 错误: {e}", "ERROR")
-                return {"success": False, "error": f"Invalid size: {size_value}"}
+                result = {"success": False, "error": f"Invalid size: {size_value}"}
+                return result
 
             order_type = signal.get("type", "market")
             price = signal.get("price")
             leverage = signal.get("leverage", 1)
             stop_loss = signal.get("stop_loss")
             take_profit = signal.get("take_profit")
+            reduce_only = signal.get("reduce_only", False)  # 🔥 关键修复：提取 reduce_only 参数
+
+            Dashboard.log(f"✅ [Debug] 参数提取完成，开始审计 (reduce_only={reduce_only})", "DEBUG")
 
             # 3. 交易审计 - 获取当前价格
             ticker = await self.client.get_ticker(symbol)
             if not ticker:
                 Dashboard.log(f"❌ [审计] 无法获取 {symbol} 当前价格", "ERROR")
-                return {"success": False, "error": "无法获取当前价格"}
+                result = {"success": False, "error": "无法获取当前价格"}
+                return result
 
-            current_price = float(ticker.get("last", 0))
+            # 👇👇👇 修复代码开始 👇👇👇
+            # 兼容处理：如果返回是 list，取第一个元素；如果是 dict，直接使用
+            if isinstance(ticker, list) and len(ticker) > 0:
+                ticker_data = ticker[0]
+            elif isinstance(ticker, dict):
+                ticker_data = ticker
+            else:
+                ticker_data = {}
+
+            current_price = float(ticker_data.get("last", 0))
+            # 👆👆👆 修复代码结束 👆👆👇
+
             if current_price == 0:
                 Dashboard.log(f"❌ [审计] {symbol} 当前价格无效", "ERROR")
-                return {"success": False, "error": "当前价格无效"}
+                result = {"success": False, "error": "当前价格无效"}
+                return result
 
             # 计算订单价值
             order_value = current_price * size
@@ -430,7 +525,17 @@ class Runtime:
             Dashboard.log("📋 [交易审计] 订单信息", "INFO")
             Dashboard.log("-" * 80, "INFO")
             Dashboard.log(f"交易对:      {symbol}", "INFO")
-            Dashboard.log(f"交易方向:    {'开多 (LONG)' if side == 'buy' else '开空 (SHORT)'}", "INFO")
+            # 交易方向判断（考虑 reduce_only）
+            is_reduce_only = signal.get("reduce_only", False)
+            if is_reduce_only:
+                if side == "sell":
+                    direction_str = "平多 (CLOSE LONG)"
+                else:  # side == "buy"
+                    direction_str = "平空 (CLOSE SHORT)"
+            else:
+                direction_str = "开多 (LONG)" if side == "buy" else "开空 (SHORT)"
+
+            Dashboard.log(f"交易方向:    {direction_str}", "INFO")
             Dashboard.log(f"当前价格:    {current_price:.6f} USDT", "INFO")
             Dashboard.log(f"交易数量:    {size:.6f}", "INFO")
             Dashboard.log(f"杠杆倍数:    {leverage}x", "INFO")
@@ -452,61 +557,84 @@ class Runtime:
             else:
                 Dashboard.log(f"止盈价格:    未设置", "INFO")
             Dashboard.log("=" * 80, "INFO")
-            Dashboard.log("-" * 80, "INFO")
-            Dashboard.log(f"强平价格:    {liquidation_price:.6f} USDT", "INFO")
-            if stop_loss:
-                stop_loss_pct = abs((stop_loss - current_price) / current_price) * 100
-                Dashboard.log(f"止损价格:    {stop_loss:.6f} USDT (止损 {stop_loss_pct:.2f}%)", "INFO")
-            else:
-                Dashboard.log(f"止损价格:    未设置", "INFO")
-            if take_profit:
-                take_profit_pct = abs((take_profit - current_price) / current_price) * 100
-                Dashboard.log(f"止盈价格:    {take_profit:.6f} USDT (止盈 {take_profit_pct:.2f}%)", "INFO")
-            else:
-                Dashboard.log(f"止盈价格:    未设置", "INFO")
-            Dashboard.log("=" * 80, "INFO")
 
-            # 4. 处理网格批量订单
+            # 5. 处理网格批量订单
             if "orders" in signal and isinstance(signal["orders"], list):
+                # ✅ 检查 order_manager 是否存在
+                if not hasattr(self, 'order_manager') or not self.order_manager:
+                    Dashboard.log(f"❌ [Execution] OrderManager 未初始化", "ERROR")
+                    result = {"success": False, "error": "OrderManager 未初始化"}
+                    return result
+
                 logger.info(f"⚡ 执行批量挂单 ({len(signal['orders'])} 笔)...")
                 success_count = 0
+                last_error = ""
                 for order in signal["orders"]:
-                    ok, _ = await self.order_manager.submit_single_order(
+                    # 👇 适配新的返回值 (3个变量)
+                    ok, _, err = await self.order_manager.submit_single_order(
                         symbol=order["symbol"],
                         side=order["side"],
                         size=float(order["size"]),
                         order_type=order["type"],
                         price=order.get("price")
                     )
-                    if ok: success_count += 1
-                    # 适当延时防止限频
+                    if ok:
+                        success_count += 1
+                    else:
+                        last_error = err  # 记录最后一个错误
+
                     if success_count % 10 == 0: await asyncio.sleep(0.1)
 
-                result = {"success": success_count > 0, "message": f"挂单 {success_count} 笔"}
+                result = {
+                    "success": success_count > 0,
+                    "message": f"挂单 {success_count} 笔",
+                    "error_msg": last_error if success_count == 0 else ""  # 如果全部失败，返回错误
+                }
 
-            # 5. 处理普通单腿订单
+            # 6. 处理普通单腿订单
             else:
-                success, order_id = await self.order_manager.submit_single_order(
+                # ✅ 检查 order_manager 是否存在
+                if not hasattr(self, 'order_manager') or not self.order_manager:
+                    Dashboard.log(f"❌ [Execution] OrderManager 未初始化", "ERROR")
+                    result = {"success": False, "error": "OrderManager 未初始化"}
+                    return result
+
+                Dashboard.log(f"✅ [Debug] 开始执行普通单腿订单 (含止盈止损)", "DEBUG")
+
+                # 👇👇👇 修改调用，传入 stop_loss、take_profit 和 reduce_only 👇👇👇
+                success, order_id, error_msg = await self.order_manager.submit_single_order(
                     symbol=symbol,
                     side=side,
                     size=size,
                     order_type=order_type,
-                    price=price
+                    price=price,
+                    stop_loss=stop_loss,     # 🔥 传入止损
+                    take_profit=take_profit, # 🔥 传入止盈
+                    reduce_only=reduce_only  # 🔥 传入平仓标记
                 )
-                result = {"success": success, "order_id": order_id}
+                result = {"success": success, "order_id": order_id, "error_msg": error_msg}
 
-            # 6. 结果处理
+            # 7. 结果处理
             if result["success"]:
                 Dashboard.log(f"✅ [Execution] 订单提交成功", "SUCCESS")
             else:
-                Dashboard.log(f"❌ [Execution] 订单提交失败: {result.get('error_msg', 'Unknown')}", "ERROR")
-                result["error"] = result.get('error_msg', 'Unknown')
+                # 👇 这里现在能打印出真正的错误了
+                error_detail = result.get('error_msg', 'Unknown')
+                Dashboard.log(f"❌ [Execution] 订单提交失败: {error_detail}", "ERROR")
+                result["error"] = error_detail
 
         except Exception as e:
             logger.error(traceback.format_exc())
             Dashboard.log(f"❌ [Execution] 交易异常: {e}", "ERROR")
             result = {"success": False, "error": str(e)}
 
+        finally:
+            # ✅ 修复：确保无论成功或失败，都切回 MONITORING 状态
+            # 但如果已经在 ERROR 状态，就不要切换
+            if not self.state_machine.is_in_state(SystemState.ERROR):
+                await self.state_machine.transition_to(SystemState.MONITORING, reason="交易完成")
+
+        # 🔑 核心修复：无论是否异常，都返回 result
         return result
     async def _update_context(self, signal: Dict, execution_result: Dict):
         """
@@ -552,6 +680,32 @@ class Runtime:
         except Exception as e:
             Dashboard.log(f"❌ [Analytics] 分析失败: {e}", "ERROR")
 
+    async def _print_account_status(self):
+        """打印账户状态 (替代原来的 heartbeat)"""
+        active_positions = [p for p in self.context.positions.values() if float(p.quantity) != 0]
+
+        status_msg = (
+            f"💓 [状态] {self.state_machine.get_current_state().value} | "
+            f"保证金: {self.context.margin_ratio:.2f}% | "
+            f"持仓数: {len(active_positions)}"
+        )
+
+        if self.context.selected_symbol:
+            status_msg += f" | 市场: {self.context.selected_symbol} ({self.context.market_regime})"
+
+        Dashboard.log(status_msg, "INFO")
+
+        # 打印持仓详情
+        if active_positions:
+            for pos in active_positions:
+                side_str = "多" if pos.side == "long" else "空"
+                pnl_str = f"{pos.unrealized_pnl:+.2f}" if pos.unrealized_pnl != 0 else "0.00"
+                Dashboard.log(
+                    f"   📊 {pos.symbol} {side_str} {pos.quantity:.4f} | "
+                    f"入场价: {pos.entry_price:.6f} | 浮动盈亏: {pnl_str} USDT",
+                    "DEBUG"
+                )
+
     def _print_heartbeat(self):
         """打印心跳信息"""
         if self.context.selected_symbol:
@@ -568,3 +722,96 @@ class Runtime:
                 f"保证金: {self.context.margin_ratio:.2f}%",
                 "INFO"
             )
+
+    # -------------------------------------------------------------------------
+    # 🔥 新增：持仓管理和信号处理方法
+    # -------------------------------------------------------------------------
+
+    async def _manage_positions(self) -> list:
+        """
+        【11】持仓管理 (Exit Strategy)
+        遍历当前所有持仓，调用策略判断是否需要平仓
+        """
+        exit_signals = []
+        try:
+            # 获取当前所有持仓符号
+            # 假设 context.positions 是一个字典 {symbol: PositionObject}
+            # 如果没有直接属性，尝试从 context.get_all_positions() 获取
+            positions = []
+            if hasattr(self.context, "get_all_positions"):
+                positions = self.context.get_all_positions()
+            elif hasattr(self.context, "positions"):
+                positions = list(self.context.positions.values())
+            elif hasattr(self.context, "active_signals"):
+                # 从活跃信号中提取持仓符号
+                for symbol, signal in self.context.active_signals.items():
+                    pos = self.context.get_position(symbol)
+                    if pos and float(pos.quantity) != 0:
+                        positions.append(pos)
+
+            if not positions:
+                return []
+
+            for pos in positions:
+                # 跳过空仓位
+                if float(pos.quantity) == 0:
+                    continue
+
+                symbol = pos.symbol
+
+                # 🔥 关键修复：再次确认持仓（防止持仓同步延迟导致误判）
+                fresh_pos = self.context.get_position(symbol)
+                if not fresh_pos or float(fresh_pos.quantity) == 0:
+                    Dashboard.log(f"⏳ {symbol} 持仓已清空，跳过评估", "DEBUG")
+                    continue
+
+                # 调用策略评估 (使用上一轮更新过的 evaluate_position，含趋势检测)
+                # 注意：这里直接调用 strategy 实例的方法
+                if hasattr(self.strategy, "evaluate_position"):
+                    result = await self.strategy.evaluate_position(symbol)
+
+                    if result and result.get("action") == "close":
+                        Dashboard.log(f"🚨 [离场信号] {symbol}: {result.get('reason')}", "WARNING")
+
+                        # 生成平仓信号
+                        # 获取持仓方向，平仓则是反向
+                        # 假设 pos.quantity > 0 是多头，平仓则卖出
+                        is_long = float(pos.quantity) > 0
+                        side = "sell" if is_long else "buy"
+
+                        exit_signal = {
+                            "symbol": symbol,
+                            "side": side,
+                            "type": "market",
+                            "size": abs(float(pos.quantity)),  # 全平
+                            "reduce_only": True,
+                            "reason": f"Exit: {result.get('reason')}",
+                            "is_exit": True  # 标记为离场单
+                        }
+                        exit_signals.append(exit_signal)
+
+        except Exception as e:
+            logger.error(f"持仓巡检失败: {e}")
+
+        return exit_signals
+
+    async def _process_signal(self, signal: Dict):
+        """
+        统一处理信号（风控 -> 执行 -> 更新）
+        抽离出来供 入场 和 离场 共用
+        """
+        # --- 【11】风控审批 (Risk Approval) ---
+        approval = await self._risk_approval(signal)
+
+        if approval.get("approved", False):
+            # --- 【12】执行 (Execution) ---
+            execution_result = await self._execute_trade(signal, approval)
+
+            if execution_result:
+                # --- 【13】更新 Context ---
+                await self._update_context(signal, execution_result)
+
+                # --- 【14】Analytics (分析) ---
+                await self._analytics(signal, execution_result)
+        else:
+            Dashboard.log(f"🛡️ [风控] 拒绝交易: {approval.get('reason')}", "WARNING")

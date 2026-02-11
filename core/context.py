@@ -163,9 +163,36 @@ class Context:
             total=available + frozen,
         )
 
-    def update_position(self, position: Position):
-        """更新持仓"""
-        self.positions[position.symbol] = position
+    def update_position(self, position: Optional[Position] = None, symbol: Optional[str] = None,
+                        quantity: Optional[float] = None, avg_price: Optional[float] = None,
+                        pnl: Optional[float] = None):
+        """更新持仓 (支持多种参数形式)"""
+        if position:
+            # 如果传入 Position 对象，直接使用
+            self.positions[position.symbol] = position
+        elif symbol is not None:
+            # 如果传入的是单独参数，创建或更新 Position
+            current_pos = self.positions.get(symbol)
+            if current_pos:
+                # 更新现有持仓
+                if quantity is not None:
+                    current_pos.quantity = quantity
+                if avg_price is not None:
+                    current_pos.entry_price = avg_price
+                if pnl is not None:
+                    current_pos.unrealized_pnl = pnl
+            else:
+                # 创建新持仓（使用默认值）
+                self.positions[symbol] = Position(
+                    symbol=symbol,
+                    side="long" if quantity and quantity > 0 else "short",
+                    quantity=quantity if quantity is not None else 0.0,
+                    entry_price=avg_price if avg_price is not None else 0.0,
+                    current_price=avg_price if avg_price is not None else 0.0,
+                    unrealized_pnl=pnl if pnl is not None else 0.0,
+                    margin_used=0.0,
+                    leverage=1.0
+                )
 
     def update_market_data(self, market_data: MarketData):
         """更新市场数据"""
