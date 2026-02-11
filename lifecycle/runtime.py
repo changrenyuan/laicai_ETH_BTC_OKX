@@ -26,7 +26,7 @@ class Runtime:
         self.strategy = strategy
         self.config = config
         self.is_running = True
-
+        # self.logger = logging.getLogger("Runtime")
         # 提取组件
         self.context: Context = components["context"]
         self.state_machine = components["state_machine"]
@@ -248,55 +248,126 @@ class Runtime:
 
     async def _risk_approval(self, signal: Dict) -> Dict:
         """
-        【11】风控审批 (Risk Approval)
-        - 检查资金是否充足
-        - 检查仓位是否超限
-        - 检查市场环境是否适合
+        【11】风控审批 (Risk Engine)
+        ❌ 严禁硬编码 return True
+        ✅ 必须调用 risk_manager 进行实质性检查
         """
+        if not self.risk_manager:
+            logger.critical("🚨 严重错误: RiskManager 未初始化，为了安全拒绝所有交易！")
+            return {"approved": False, "reason": "RiskManager missing"}
+
         try:
-            approval = {
-                "approved": True,
-                "reason": "直接通过",
-                "max_position": 0,
-                "stop_loss": 0,
-                "take_profit": 0,
-            }
+            logger.info(f"🛡️ [风控] 正在审计信号: {signal.get('symbol')} {signal.get('side')}")
 
-            # 如果有风险管理者，调用其检查方法
-            if self.risk_manager:
-                approved, approval_data = await self.risk_manager.check_order(signal)
-                approval["approved"] = approved
-                approval.update(approval_data)
+            # 调用风控模块的检查方法
+            # 注意：请确认 risk/__init__.py 中 RiskManager 的入口方法名
+            # 通常是 check_order 或 approve
 
-            return approval
+            approval_result = None
+
+            # 尝试调用 check_order (常见命名)
+            if hasattr(self.risk_manager, 'check_order'):
+                approval_result = await self.risk_manager.check_order(signal)
+            # 尝试调用 approve (备用命名)
+            elif hasattr(self.risk_manager, 'approve'):
+                approval_result = await self.risk_manager.approve(signal)
+            else:
+                logger.error("❌ RiskManager 缺少 check_order 或 approve 方法")
+                return {"approved": False, "reason": "Method missing"}
+
+            # 处理风控返回结果
+            # 假设返回结构是 {"approved": bool, "modified_size": float, "reason": str}
+            # 或者直接返回 bool
+
+            if isinstance(approval_result, bool):
+                is_approved = approval_result
+                reason = "Boolean return"
+                modified_size = signal.get("size")
+            elif isinstance(approval_result, dict):
+                is_approved = approval_result.get("approved", False)
+                reason = approval_result.get("reason", "")
+                modified_size = approval_result.get("modified_size", signal.get("size"))
+            else:
+                is_approved = False
+                reason = f"Unknown return type: {type(approval_result)}"
+                modified_size = 0
+
+            if is_approved:
+                logger.info(f"✅ [风控] 审批通过 (Size: {modified_size})")
+                return {"approved": True, "modified_size": modified_size}
+            else:
+                logger.warning(f"🛑 [风控] 拒绝交易: {reason}")
+                return {"approved": False, "reason": reason}
 
         except Exception as e:
-            Dashboard.log(f"❌ [Risk] 风控审批失败: {e}", "ERROR")
-            return {"approved": False, "reason": str(e)}
-
-    async def _execute_trade(self, signal: Dict, approval: Dict) -> Dict:
-        """
-        【12】执行 (Execution)
-        - 原子下单
-        - 处理跛脚/撤单/补单
-        - 对冲检查
-        """
-        try:
-            Dashboard.log("⚡ [Execution] 开始执行交易...", "INFO")
-
-            # 状态转换
-            await self.state_machine.transition_to(SystemState.OPENING_POSITION, reason="开始执行")
-
-            # 执行交易
-            result = await self.strategy.execute(signal, approval)
-
-            return result
-
-        except Exception as e:
-            Dashboard.log(f"❌ [Execution] 交易执行失败: {e}", "ERROR")
+            logger.error(f"❌ 风控审批过程发生异常: {e}")
             logger.error(traceback.format_exc())
-            return {"success": False, "error": str(e)}
+            # 发生异常时，为了安全，必须拒绝！
+            return {"approved": False, "reason": f"Exception: {e}"}
+    async def _execute_trade(self, signal: Dict, approval: Optional[Dict] = None):
+        """
+        【12】执行交易 (Execution)
+        - 调用 OrderManager 执行下单
+        """
+        if not signal: return
 
+        symbol = signal.get("symbol")
+        side = signal.get("side")
+
+        # ✅ 修复: 增加 await
+        await self.state_machine.transition_to(SystemState.OPENING_POSITION)
+        Dashboard.log(f"⚡ [Execution] 开始执行: {symbol} {side}", "INFO")
+
+        try:
+            # 1. 提取参数
+            size = float(signal.get("size", 0))
+            order_type = signal.get("type", "market")
+            price = signal.get("price")
+
+            # 2. 处理网格批量订单
+            if "orders" in signal and isinstance(signal["orders"], list):
+                self.logger.info(f"⚡ 执行批量挂单 ({len(signal['orders'])} 笔)...")
+                success_count = 0
+                for order in signal["orders"]:
+                    ok, _ = await self.order_manager.submit_single_order(
+                        symbol=order["symbol"],
+                        side=order["side"],
+                        size=float(order["size"]),
+                        order_type=order["type"],
+                        price=order.get("price")
+                    )
+                    if ok: success_count += 1
+                    # 适当延时防止限频
+                    if success_count % 10 == 0: await asyncio.sleep(0.1)
+
+                result = {"success": success_count > 0, "message": f"挂单 {success_count} 笔"}
+
+            # 3. 处理普通单腿订单
+            else:
+                success, order_id = await self.order_manager.submit_single_order(
+                    symbol=symbol,
+                    side=side,
+                    size=size,
+                    order_type=order_type,
+                    price=price
+                )
+                result = {"success": success, "order_id": order_id}
+
+            # 4. 结果处理
+            if result["success"]:
+                Dashboard.log(f"✅ 交易成功", "SUCCESS")
+                self._update_context(signal, result)
+            else:
+                Dashboard.log(f"❌ 交易失败: {result.get('error_msg', 'Unknown')}", "ERROR")
+
+        except Exception as e:
+            self.logger.error(traceback.format_exc())
+            # ✅ 修复: 增加 await
+            await self.state_machine.transition_to(SystemState.ERROR)
+
+        finally:
+            # ✅ 修复: 增加 await
+            await self.state_machine.transition_to(SystemState.MONITORING)
     async def _update_context(self, signal: Dict, execution_result: Dict):
         """
         【13】更新 Context

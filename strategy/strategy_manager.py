@@ -5,6 +5,7 @@ from typing import Dict, Optional, Any
 from core.context import Context
 from core.events import EventBus
 from core.state_machine import StateMachine
+from strategy import TrendRollStrategy
 
 # 导入具体策略
 from strategy.base_strategy import BaseStrategy
@@ -108,7 +109,8 @@ class StrategyManager:
         # 确保 futures_grid 或 trend 配置块存在
         if "futures_grid" not in dynamic_config:
             dynamic_config["futures_grid"] = {}
-
+        if "trend_strategy" not in dynamic_config:
+            dynamic_config["trend_strategy"] = {}  # 如果没有，创建一个空字典
         # 注入 Symbol !!!
         dynamic_config["futures_grid"]["symbol"] = symbol
         # 如果有 trend 配置块，也要注入
@@ -130,13 +132,11 @@ class StrategyManager:
             elif strategy_type == "trend":
                 self.logger.info(f"✨ 初始化新趋势策略实例: {symbol}")
                 # 使用上面定义的内部类，或者你实际的 TrendStrategy
-                strategy = TrendStrategy(
+                strategy = TrendRollStrategy(
                     dynamic_config,
                     self.context,
                     self.sm,
-                    self.om,
-                    fund_guard=None,  # 如果需要，传递各个Guard
-                    margin_guard=None
+                    self.om
                 )
             # 4. 初始化策略 (如果是异步初始化)
             if strategy:
