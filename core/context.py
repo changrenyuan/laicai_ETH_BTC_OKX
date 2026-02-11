@@ -131,6 +131,15 @@ class Context:
         self.liquidity_depth: float = 0.0  # 流动性深度
         self.last_scan_time: float = 0.0  # 上次市场扫描时间
 
+        # 市场扫描相关
+        self.scan_results: List[Dict[str, Any]] = []  # 扫描结果列表
+        self.selected_symbol: Optional[str] = None  # 当前选中的交易对
+        self.market_regime: str = "UNKNOWN"  # 当前市场环境 (TREND/RANGE/CHAOS)
+
+        # 策略信号
+        self.strategy_signals: List[Dict[str, Any]] = []  # 策略信号列表
+        self.active_signals: Dict[str, Dict[str, Any]] = {}  # 活跃信号
+
         # 系统状态
         self.metrics = SystemMetrics()
         self.start_time: datetime = datetime.now()
@@ -197,6 +206,45 @@ class Context:
             self.margin_ratio = float("inf")
 
         return self.margin_ratio
+
+    def update_scan_results(self, scan_results: List[Dict[str, Any]]):
+        """更新市场扫描结果"""
+        self.scan_results = scan_results
+        if scan_results:
+            # 选择评分最高的作为当前交易对
+            best_result = max(scan_results, key=lambda x: x.get("score", 0))
+            self.selected_symbol = best_result.get("symbol")
+            self.market_regime = best_result.get("regime", "UNKNOWN")
+        else:
+            self.selected_symbol = None
+            self.market_regime = "UNKNOWN"
+
+    def get_best_candidate(self) -> Optional[Dict[str, Any]]:
+        """获取最佳候选交易对"""
+        if not self.scan_results:
+            return None
+        return max(self.scan_results, key=lambda x: x.get("score", 0))
+
+    def add_strategy_signal(self, signal: Dict[str, Any]):
+        """添加策略信号"""
+        signal["timestamp"] = datetime.now().isoformat()
+        self.strategy_signals.append(signal)
+        # 只保留最近 10 个信号
+        if len(self.strategy_signals) > 10:
+            self.strategy_signals = self.strategy_signals[-10:]
+
+    def get_active_signal(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """获取指定交易对的活跃信号"""
+        return self.active_signals.get(symbol)
+
+    def set_active_signal(self, symbol: str, signal: Dict[str, Any]):
+        """设置活跃信号"""
+        self.active_signals[symbol] = signal
+
+    def clear_active_signal(self, symbol: str):
+        """清除活跃信号"""
+        if symbol in self.active_signals:
+            del self.active_signals[symbol]
 
     def save_runtime_state(self):
         """保存运行状态到文件"""

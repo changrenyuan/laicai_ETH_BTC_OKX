@@ -157,3 +157,116 @@ class Dashboard:
             if msg: print(f"   原因: {msg}")
         else:
             print(f"{Colors.GREEN}✅ 执行完美: {success_count} 单已挂出{Colors.RESET}")
+
+    @staticmethod
+    def print_scan_results(scan_results):
+        """
+        打印市场扫描结果
+        Args:
+            scan_results: ScanResult 对象列表
+        """
+        print(f"\n{Colors.HEADER}🔭 [Scanner] 市场扫描结果{Colors.RESET}")
+        print("-" * 80)
+
+        if not scan_results:
+            print(f"   {Colors.YELLOW}无符合条件的候选品种{Colors.RESET}")
+            print("-" * 80 + "\n")
+            return
+
+        # 表头
+        print(f"{'排名':<6} {'交易对':<20} {'24H成交额(USDT)':<18} {'涨跌幅':<10} {'市场环境':<12} {'评分':<10}")
+        print("-" * 80)
+
+        # 列表
+        for idx, result in enumerate(scan_results, 1):
+            symbol = result.symbol
+
+            # 成交额格式化
+            volume = result.volume_24h
+            if volume >= 100000000:
+                vol_str = f"{volume / 100000000:.2f} 亿"
+            elif volume >= 1000000:
+                vol_str = f"{volume / 1000000:.2f} 万"
+            else:
+                vol_str = f"{volume:.2f}"
+
+            # 涨跌幅颜色
+            price_change = result.price_change_24h
+            change_str = f"{price_change:+.2f}%"
+            if price_change > 0:
+                change_str = f"{Colors.GREEN}{change_str}{Colors.RESET}"
+            elif price_change < 0:
+                change_str = f"{Colors.RED}{change_str}{Colors.RESET}"
+
+            # 市场环境颜色
+            regime = result.regime
+            if regime == "TREND":
+                regime_str = f"{Colors.CYAN}趋势{Colors.RESET}"
+            elif regime == "RANGE":
+                regime_str = f"{Colors.YELLOW}震荡{Colors.RESET}"
+            else:  # CHAOS
+                regime_str = f"{Colors.RED}混乱{Colors.RESET}"
+
+            # 评分颜色
+            score = result.score
+            if score >= 70:
+                score_str = f"{Colors.GREEN}{score:.1f}{Colors.RESET}"
+            elif score >= 50:
+                score_str = f"{Colors.YELLOW}{score:.1f}{Colors.RESET}"
+            else:
+                score_str = f"{Colors.RED}{score:.1f}{Colors.RESET}"
+
+            print(f"{idx:<6} {symbol:<20} {vol_str:<18} {change_str:<16} {regime_str:<18} {score_str}")
+
+        print("-" * 80 + "\n")
+
+    @staticmethod
+    def print_regime_analysis(best_candidate):
+        """
+        打印市场环境分析详情
+        Args:
+            best_candidate: ScanResult 对象（最佳候选）
+        """
+        print(f"\n{Colors.HEADER}🌊 [Regime] 市场环境分析详情 - {best_candidate.symbol}{Colors.RESET}")
+        print("-" * 80)
+
+        # 市场环境
+        regime = best_candidate.regime
+        if regime == "TREND":
+            regime_desc = f"{Colors.CYAN}📈 趋势市{Colors.RESET} - 价格有明确方向，适合趋势策略"
+        elif regime == "RANGE":
+            regime_desc = f"{Colors.YELLOW}⚖️ 震荡市{Colors.RESET} - 价格在区间内波动，适合网格策略"
+        else:  # CHAOS
+            regime_desc = f"{Colors.RED}🌪️ 混乱市{Colors.RESET} - 高波动无方向，建议观望"
+
+        print(f"   市场环境: {regime_desc}")
+        print(f"   置信度: {best_candidate.to_dict()['confidence']}")
+
+        # 技术指标
+        print(f"\n   📊 技术指标:")
+        print(f"      ADX: {best_candidate.adx:.2f} {'(强趋势)' if best_candidate.adx > 25 else '(弱趋势)'}")
+        print(f"      ATR: {best_candidate.atr:.4f}")
+        print(f"      ATR 扩张倍数: {best_candidate.atr_expansion:.2f}x")
+        print(f"      波动率比率: {best_candidate.volatility_ratio:.2%}")
+
+        # 价格信息
+        print(f"\n   💰 价格信息:")
+        print(f"      当前价格: ${best_candidate.current_price:.2f}")
+        print(f"      24H 最高: ${best_candidate.high_24h:.2f}")
+        print(f"      24H 最低: ${best_candidate.low_24h:.2f}")
+        print(f"      24H 涨跌幅: {best_candidate.price_change_24h:+.2f}%")
+
+        # 成交额
+        volume = best_candidate.volume_24h
+        if volume >= 100000000:
+            vol_str = f"{volume / 100000000:.2f} 亿 USDT"
+        elif volume >= 1000000:
+            vol_str = f"{volume / 1000000:.2f} 万 USDT"
+        else:
+            vol_str = f"{volume:.2f} USDT"
+        print(f"      24H 成交额: {vol_str}")
+
+        # 综合评分
+        print(f"\n   🎯 综合评分: {Colors.GREEN}{best_candidate.score:.1f}/100{Colors.RESET}")
+
+        print("-" * 80 + "\n")

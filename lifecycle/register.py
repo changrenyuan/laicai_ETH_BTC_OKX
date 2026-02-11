@@ -25,6 +25,10 @@ from monitor.pnl_tracker import PnLTracker
 from strategy import StrategyFactory
 from monitor.dashboard import Dashboard
 
+# 新增：导入 Scanner 和 Regime Detector
+from scanner.market_scanner import MarketScanner
+from strategy.regime_detector import RegimeDetector
+
 logger = logging.getLogger("Orchestrator")
 
 
@@ -105,3 +109,30 @@ class Register:
         # 4. 组装监控层
         pnl_tracker = PnLTracker(cfg)
         self.components["pnl_tracker"] = pnl_tracker
+
+        # 5. 组装市场扫描层（Scanner + Regime Detector）
+        market_scan_config = cfg.get("strategy", {}).get("market_scan", {})
+        regime_config = cfg.get("strategy", {}).get("regime", {})
+
+        if market_scan_config.get("enabled", False):
+            try:
+                # 创建 Regime Detector
+                regime_detector = RegimeDetector(regime_config)
+                self.components["regime_detector"] = regime_detector
+                Dashboard.log("✅ Regime Detector 注册成功", "SUCCESS")
+
+                # 创建 Market Scanner
+                market_scanner = MarketScanner(
+                    client=client,
+                    config=market_scan_config,
+                    regime_detector=regime_detector
+                )
+                self.components["market_scanner"] = market_scanner
+                Dashboard.log("✅ Market Scanner 注册成功", "SUCCESS")
+
+            except Exception as e:
+                logger.error(f"注册 Scanner 或 Regime Detector 失败: {e}")
+                traceback.print_exc()
+                Dashboard.log(f"⚠️ Scanner 或 Regime Detector 注册失败，继续运行但市场扫描功能将不可用", "WARNING")
+        else:
+            Dashboard.log("⚠️ 市场扫描功能未开启 (market_scan.enabled = false)", "INFO")
