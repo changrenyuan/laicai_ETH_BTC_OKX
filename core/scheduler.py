@@ -1,6 +1,6 @@
 """
 ⏰ 调度器 (Phase 5 实战版)
-负责定期执行低频任务：资金再平衡、健康检查、每日报告
+负责定期执行低频任务：资金再平衡、健康检查、每日报告、持仓评估
 """
 import asyncio
 import logging
@@ -28,6 +28,16 @@ class Scheduler:
         self.logger = logging.getLogger(__name__)
         self.is_running = False
 
+        # 可选组件（用于多币种趋势策略）
+        self.multi_trend_strategy = None
+        self.client = None
+
+    def set_multi_trend_strategy(self, strategy, client):
+        """设置多币种趋势策略（用于持仓评估）"""
+        self.multi_trend_strategy = strategy
+        self.client = client
+        self.logger.info("✅ Scheduler已注册MultiTrendStrategy")
+
     async def start(self):
         """启动后台任务"""
         self.is_running = True
@@ -35,6 +45,8 @@ class Scheduler:
 
         # 启动并发任务循环
         asyncio.create_task(self._run_minutely_tasks()) # 1分钟
+        asyncio.create_task(self._run_5minutely_tasks()) # 5分钟
+        asyncio.create_task(self._run_15minutely_tasks()) # 15分钟
         asyncio.create_task(self._run_hourly_tasks())   # 1小时
         asyncio.create_task(self._run_daily_tasks())    # 24小时
 
@@ -53,6 +65,73 @@ class Scheduler:
                 self.logger.error(f"Minutely task failed: {e}")
 
             await asyncio.sleep(60)
+
+    async def _run_5minutely_tasks(self):
+        """每5分钟任务: 触发市场扫描（通过Runtime的scan_interval控制）"""
+        while self.is_running:
+            try:
+                # 这个任务主要是为了日志记录，实际扫描由Runtime控制
+                self.logger.debug("📊 [5min] 市场扫描检查")
+
+            except Exception as e:
+                self.logger.error(f"5minutely task failed: {e}")
+
+            await asyncio.sleep(300)
+
+    async def _run_15minutely_tasks(self):
+        """每15分钟任务: 持仓评估（仅当multi_trend策略启用时）"""
+        while self.is_running:
+            try:
+                if self.multi_trend_strategy:
+                    await self._evaluate_positions()
+                else:
+                    self.logger.debug("📊 [15min] 持仓评估跳过（未启用MultiTrendStrategy）")
+
+            except Exception as e:
+                self.logger.error(f"15minutely task failed: {e}")
+
+            await asyncio.sleep(900)  # 15分钟 = 900秒
+
+    async def _evaluate_positions(self):
+        """评估所有持仓，决定是否平仓换仓"""
+        self.logger.info("📈 [15min] 开始评估持仓...")
+
+        try:
+            # 获取当前所有持仓
+            positions = self.context.positions
+
+            if not positions:
+                self.logger.info("📊 [15min] 无持仓，跳过评估")
+                return
+
+            # 评估每个持仓
+            close_signals = []
+            for symbol, pos in positions.items():
+                if float(pos.quantity) == 0:
+                    continue
+
+                # 调用MultiTrendStrategy的evaluate_position方法
+                evaluation = await self.multi_trend_strategy.evaluate_position(symbol)
+
+                if evaluation.get("action") == "close":
+                    close_signals.append({
+                        "symbol": symbol,
+                        "side": "sell" if float(pos.quantity) > 0 else "buy",
+                        "size": abs(float(pos.quantity)),
+                        "reason": evaluation.get("reason"),
+                        "reduce_only": True
+                    })
+                    self.logger.info(f"⚠️ [{symbol}] {evaluation.get('reason')}")
+
+            # 执行平仓（这里简化，实际应该通过OrderManager）
+            for signal in close_signals:
+                self.logger.info(f"🚀 [平仓] {signal['symbol']} {signal['side']} {signal['size']} - {signal['reason']}")
+                # TODO: 调用OrderManager执行平仓
+
+        except Exception as e:
+            self.logger.error(f"❌ 评估持仓失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def _run_hourly_tasks(self):
         """每小时任务: 对冲审计 & PnL更新"""

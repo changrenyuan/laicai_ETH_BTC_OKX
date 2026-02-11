@@ -104,48 +104,71 @@ class MarketScanner:
         Returns:
             List[ScanResult]: 扫描结果列表（按评分排序）
         """
-        self.logger.info("开始市场扫描...")
+        self.logger.info("=" * 80)
+        self.logger.info("🔍 开始市场扫描...")
+        self.logger.info("=" * 80)
+        self.logger.info(f"📋 扫描配置:")
+        self.logger.info(f"   - 返回数量: {self.top_n}")
+        self.logger.info(f"   - 最小成交额: {self.min_volume_24h:,} USDT")
+        self.logger.info(f"   - 涨跌幅范围: {self.min_price_change}% ~ {self.max_price_change}%")
+        self.logger.info(f"   - 趋势筛选: {'开启' if self.trend_only else '关闭'}")
+        if self.trend_only:
+            self.logger.info(f"   - 最小ADX: {self.min_adx}")
+            self.logger.info(f"   - 最小ATR扩张: {self.min_atr_expansion}")
+        self.logger.info("-" * 80)
 
         try:
             # 1. 获取所有 USDT 永续合约
+            self.logger.info("📡 步骤1: 获取交易品种列表...")
             instruments = await self._fetch_instruments()
 
             if not instruments:
-                self.logger.warning("未获取到交易品种列表")
+                self.logger.warning("❌ 未获取到交易品种列表")
                 return []
 
+            self.logger.info(f"✅ 获取到 {len(instruments)} 个 USDT 永续合约")
+
             # 2. 获取每个品种的 Ticker 数据
+            self.logger.info("📡 步骤2: 获取Ticker数据...")
             tickers = await self._fetch_tickers(instruments)
 
             if not tickers:
-                self.logger.warning("未获取到 Ticker 数据")
+                self.logger.warning("❌ 未获取到 Ticker 数据")
                 return []
 
+            self.logger.info(f"✅ 获取到 {len(tickers)} 个 Ticker 数据")
+
             # 3. 初筛（按成交额和涨跌幅）
+            self.logger.info("🔍 步骤3: 初筛（成交额 & 涨跌幅）...")
             filtered_tickers = self._filter_tickers(tickers)
 
             if not filtered_tickers:
-                self.logger.warning("初筛后无候选品种")
+                self.logger.warning("❌ 初筛后无候选品种")
+                self.logger.info("=" * 80)
                 return []
 
-            self.logger.info(f"初筛后候选品种数量: {len(filtered_tickers)}")
+            self.logger.info(f"✅ 初筛后候选品种数量: {len(filtered_tickers)}")
 
             # 4. 对每个候选品种进行技术分析（获取 K 线并计算指标）
+            self.logger.info("🔍 步骤4: 技术分析（趋势筛选）...")
             candidates = await self._analyze_candidates(filtered_tickers)
 
             if not candidates:
-                self.logger.warning("技术分析后无候选品种")
+                self.logger.warning("❌ 技术分析后无候选品种")
+                self.logger.info("=" * 80)
                 return []
 
             # 5. 排序并返回前 N 个
+            self.logger.info("📊 步骤5: 排序并选择前 N 个...")
             sorted_candidates = sorted(candidates, key=lambda x: x.score, reverse=True)
             final_candidates = sorted_candidates[:self.top_n]
 
-            self.logger.info(f"最终候选品种数量: {len(final_candidates)}")
+            self.logger.info(f"✅ 最终候选品种数量: {len(final_candidates)}")
+            self.logger.info("=" * 80)
             return final_candidates
 
         except Exception as e:
-            self.logger.error(f"市场扫描失败: {e}")
+            self.logger.error(f"❌ 市场扫描失败: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -218,6 +241,12 @@ class MarketScanner:
             List[Dict]: 筛选后的 Ticker 列表
         """
         filtered = []
+        reject_stats = {
+            "low_volume": 0,
+            "low_volatility": 0,
+            "high_volatility": 0,
+            "error": 0
+        }
 
         for ticker in tickers:
             try:
@@ -237,18 +266,23 @@ class MarketScanner:
                     price_change_24h = ((last_price - open_24h) / open_24h) * 100
                     # 汇报每一个币种的筛选过程 (满足你的汇报需求)
                 self.logger.info(
-                    f"🔍 [初筛] {symbol} | 成交额: {volume_24h:,.0f} USDT | 涨跌幅: {price_change_24h:.2f}%")
+                    f"🔍 [初筛] {symbol:20s} | 成交额: {volume_24h:15,.0f} USDT | 涨跌幅: {price_change_24h:6.2f}%")
+
                 if volume_24h < self.min_volume_24h:
-                    self.logger.info(f"   ❌ 淘汰: 成交额低于门槛 ({self.min_volume_24h})")
+                    self.logger.info(f"   ❌ 淘汰: 成交额低于门槛 ({self.min_volume_24h:,} USDT)")
+                    reject_stats["low_volume"] += 1
                     continue
 
                 if abs(price_change_24h) < self.min_price_change:
                     self.logger.info(f"   ❌ 淘汰: 涨跌幅波动不足 ({self.min_price_change}%)")
+                    reject_stats["low_volatility"] += 1
                     continue
 
                 if abs(price_change_24h) > self.max_price_change:
-                    self.logger.info(f"   ❌ 淘汰: 涨跌幅过激, 风险过高")
+                    self.logger.info(f"   ❌ 淘汰: 涨跌幅过激, 风险过高 ({abs(price_change_24h):.2f}% > {self.max_price_change}%)")
+                    reject_stats["high_volatility"] += 1
                     continue
+
                 # 筛选条件
                 if volume_24h >= self.min_volume_24h:
                     if abs(price_change_24h) >= self.min_price_change:
@@ -263,11 +297,26 @@ class MarketScanner:
                             filtered.append(ticker)
 
             except Exception as e:
-                self.logger.error(f"筛选 Ticker 失败: {e}")
+                self.logger.error(f"❌ 筛选 {ticker.get('instId', 'Unknown')} 失败: {e}")
+                reject_stats["error"] += 1
                 continue
 
         # 按 24h 成交额排序
         filtered.sort(key=lambda x: x.get("_volume_24h", 0), reverse=True)
+
+        # 输出淘汰统计
+        self.logger.info(f"📊 初筛统计:")
+        self.logger.info(f"   - 总数量: {len(tickers)}")
+        self.logger.info(f"   - 通过: {len(filtered)}")
+        self.logger.info(f"   - 淘汰: {len(tickers) - len(filtered)}")
+        if reject_stats["low_volume"] > 0:
+            self.logger.info(f"     * 成交额过低: {reject_stats['low_volume']}")
+        if reject_stats["low_volatility"] > 0:
+            self.logger.info(f"     * 涨跌幅过低: {reject_stats['low_volatility']}")
+        if reject_stats["high_volatility"] > 0:
+            self.logger.info(f"     * 涨跌幅过高: {reject_stats['high_volatility']}")
+        if reject_stats["error"] > 0:
+            self.logger.info(f"     * 错误: {reject_stats['error']}")
 
         return filtered
 
@@ -276,6 +325,14 @@ class MarketScanner:
         并发对候选品种进行技术分析
         """
         candidates = []
+        reject_stats = {
+            "no_klines": 0,
+            "no_regime": 0,
+            "not_trend": 0,
+            "low_adx": 0,
+            "low_atr": 0,
+            "error": 0
+        }
 
         # 🟢 创建信号量，限制最大并发数为 20
         # OKX 公共接口限频通常较宽松，但为了安全起见限制并发
@@ -291,29 +348,38 @@ class MarketScanner:
                     klines = await self.client.get_candlesticks(symbol, bar="4H", limit=100)
 
                     if not klines or len(klines) < 50:
+                        self.logger.info(f"   ❌ [{symbol}] K线数据不足")
+                        reject_stats["no_klines"] += 1
                         return None
 
                     # 市场环境分析
                     regime_analysis = self.regime_detector.analyze(symbol, klines)
                     if not regime_analysis:
+                        self.logger.info(f"   ❌ [{symbol}] 市场环境分析失败")
+                        reject_stats["no_regime"] += 1
                         return None
 
                     # 趋势筛选：如果配置了trend_only，只保留TREND环境的合约
                     if self.trend_only:
                         if regime_analysis.regime != "TREND":
-                            self.logger.info(f"🔍 [趋势筛选] {symbol} 市场环境为 {regime_analysis.regime}，跳过")
+                            self.logger.info(f"   ❌ [{symbol}] 市场环境为 {regime_analysis.regime}，跳过")
+                            reject_stats["not_trend"] += 1
                             return None
                         # 检查ADX是否达标
                         if regime_analysis.adx < self.min_adx:
-                            self.logger.info(f"🔍 [趋势筛选] {symbol} ADX={regime_analysis.adx:.1f} < {self.min_adx}，跳过")
+                            self.logger.info(f"   ❌ [{symbol}] ADX={regime_analysis.adx:.1f} < {self.min_adx}，趋势强度不足")
+                            reject_stats["low_adx"] += 1
                             return None
                         # 检查ATR扩张是否达标
                         if regime_analysis.atr_expansion < self.min_atr_expansion:
-                            self.logger.info(f"🔍 [趋势筛选] {symbol} ATR扩张={regime_analysis.atr_expansion:.2f} < {self.min_atr_expansion}，跳过")
+                            self.logger.info(f"   ❌ [{symbol}] ATR扩张={regime_analysis.atr_expansion:.2f} < {self.min_atr_expansion}，波动率不足")
+                            reject_stats["low_atr"] += 1
                             return None
 
                     # 计算分数
                     score = self._calculate_score(ticker, regime_analysis)
+
+                    self.logger.info(f"   ✅ [{symbol}] 通过筛选 - 评分: {score:.2f} | 环境: {regime_analysis.regime} | ADX: {regime_analysis.adx:.1f}")
 
                     return ScanResult(
                         symbol=symbol,
@@ -330,7 +396,8 @@ class MarketScanner:
                         volatility_ratio=regime_analysis.volatility_ratio,
                     )
                 except Exception as e:
-                    self.logger.warning(f"分析 {ticker.get('instId')} 失败: {e}")
+                    self.logger.error(f"   ❌ [{ticker.get('instId')}] 分析失败: {e}")
+                    reject_stats["error"] += 1
                     return None
 
         # 🟢 创建所有任务
@@ -344,7 +411,26 @@ class MarketScanner:
             if isinstance(res, ScanResult):
                 candidates.append(res)
             elif isinstance(res, Exception):
-                self.logger.error(f"任务异常: {res}")
+                self.logger.error(f"❌ 任务异常: {res}")
+                reject_stats["error"] += 1
+
+        # 输出趋势筛选统计
+        self.logger.info(f"📊 趋势筛选统计:")
+        self.logger.info(f"   - 分析数量: {len(tickers)}")
+        self.logger.info(f"   - 通过: {len(candidates)}")
+        self.logger.info(f"   - 淘汰: {len(tickers) - len(candidates)}")
+        if reject_stats["no_klines"] > 0:
+            self.logger.info(f"     * K线数据不足: {reject_stats['no_klines']}")
+        if reject_stats["no_regime"] > 0:
+            self.logger.info(f"     * 市场环境分析失败: {reject_stats['no_regime']}")
+        if reject_stats["not_trend"] > 0:
+            self.logger.info(f"     * 非趋势环境: {reject_stats['not_trend']}")
+        if reject_stats["low_adx"] > 0:
+            self.logger.info(f"     * ADX过低: {reject_stats['low_adx']}")
+        if reject_stats["low_atr"] > 0:
+            self.logger.info(f"     * ATR扩张过低: {reject_stats['low_atr']}")
+        if reject_stats["error"] > 0:
+            self.logger.info(f"     * 分析错误: {reject_stats['error']}")
 
         return candidates
     def _calculate_score(self, ticker: Dict, regime_analysis: RegimeAnalysis) -> float:
