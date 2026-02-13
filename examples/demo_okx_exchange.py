@@ -21,6 +21,10 @@ import os
 # 添加项目路径
 sys.path.insert(0, '/workspace/projects/laicai_ETH_BTC_OKX')
 
+# 加载 .env 文件中的环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 from exchange.okx import OKXExchange
 from core.events import Event, EventType
 

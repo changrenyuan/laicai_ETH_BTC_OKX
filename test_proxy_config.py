@@ -3,6 +3,10 @@
 
 import os
 
+# 加载 .env 文件中的环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 print("=== 代理配置检查 ===\n")
 
 # 检查环境变量

@@ -69,10 +69,11 @@ class OKXExchange(ExchangeBase):
         rate_limits_config = okx_config.get("rate_limits", {})
         self._rate_limits_rules = rate_limits_config
         
-        # 超时配置（从配置读取）
-        timeout_config = okx_config.get("timeout", {})
-        self.request_timeout = timeout_config.get("request", 30)
+        # 超时配置（从配置读取）- 修正键名为 timeouts
+        timeout_config = okx_config.get("timeouts", {})
         self.connect_timeout = timeout_config.get("connect", 10)
+        self.read_timeout = timeout_config.get("read", 30)
+        self.write_timeout = timeout_config.get("write", 10)
         
         # 代理配置（从环境变量读取）
         self.proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
@@ -202,7 +203,12 @@ class OKXExchange(ExchangeBase):
         try:
             method = method.upper()
             # 使用配置文件中的超时设置
-            timeout = aiohttp.ClientTimeout(total=self.request_timeout, connect=self.connect_timeout)
+            timeout = aiohttp.ClientTimeout(
+                total=self.read_timeout,
+                connect=self.connect_timeout,
+                sock_connect=self.connect_timeout,
+                sock_read=self.read_timeout
+            )
             
             # 构建请求参数
             request_kwargs = {
