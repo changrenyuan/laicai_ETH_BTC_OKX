@@ -74,22 +74,10 @@ class OKXExchange(ExchangeBase):
         self.request_timeout = timeout_config.get("request", 30)
         self.connect_timeout = timeout_config.get("connect", 10)
         
-        # 代理配置（从配置读取或环境变量读取）
-        proxy_config = okx_config.get("proxy", {})
-        proxy_enabled = proxy_config.get("enabled", False)
-        
-        # 优先级：环境变量 > 配置文件
-        import os
+        # 代理配置（从环境变量读取）
         self.proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
-        
-        # 如果环境变量没有，则从配置文件读取
-        if not self.proxy and proxy_enabled:
-            https_proxy = proxy_config.get("https_proxy", "")
-            http_proxy = proxy_config.get("http_proxy", "")
-            self.proxy = https_proxy or http_proxy
-        
         if self.proxy:
-            self.logger.info(f"✅ 启用代理: {self.proxy}")
+            self.logger.info(f"✅ 使用代理: {self.proxy}")
         
         # Session
         self.session: Optional[aiohttp.ClientSession] = None
