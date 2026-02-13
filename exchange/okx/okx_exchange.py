@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 from exchange.base import ExchangeBase
 from core.events import Event, EventType
+from core.config_loader import get_config_loader
 
 
 class OKXExchange(ExchangeBase):
@@ -38,15 +39,40 @@ class OKXExchange(ExchangeBase):
     def __init__(self, config: Dict):
         super().__init__(config)
         
-        # OKX 认证信息
-        self.api_key = config.get("api_key", "")
-        self.secret_key = config.get("secret_key", "")
-        self.passphrase = config.get("passphrase", "")
-        self.sandbox = config.get("sandbox", False)
+        # 加载配置文件
+        config_loader = get_config_loader()
+        
+        # 从配置文件读取账户信息
+        account_config = config_loader.get_account_config()
+        sub_account = account_config.get("sub_account", {})
+        
+        self.api_key = sub_account.get("api_key", "")
+        self.secret_key = sub_account.get("api_secret", "")
+        self.passphrase = sub_account.get("api_passphrase", "")
+        self.sandbox = sub_account.get("sandbox", False)
+        
+        # 从配置文件读取交易所配置
+        exchange_config = config_loader.get_exchange_config()
+        okx_config = exchange_config.get("okx", {})
         
         # API 基础 URL
-        self.base_url = "https://www.okx.com"
-        self.ws_url = "wss://ws.okx.com:8443/ws/v5/public"
+        base_urls = okx_config.get("base_url", {})
+        self.base_url = base_urls.get("mainnet", "https://www.okx.com")
+        if self.sandbox:
+            self.base_url = base_urls.get("testnet", "https://www.okx.com")
+        
+        # WebSocket URL
+        ws_config = okx_config.get("websocket", {})
+        self.ws_url = ws_config.get("public_url", "wss://ws.okx.com:8443/ws/v5/public")
+        
+        # Rate Limits（从配置读取）
+        rate_limits_config = okx_config.get("rate_limits", {})
+        self._rate_limits_rules = rate_limits_config
+        
+        # 超时配置（从配置读取）
+        timeout_config = okx_config.get("timeout", {})
+        self.request_timeout = timeout_config.get("request", 30)
+        self.connect_timeout = timeout_config.get("connect", 10)
         
         # Session
         self.session: Optional[aiohttp.ClientSession] = None
@@ -54,14 +80,6 @@ class OKXExchange(ExchangeBase):
         # WebSocket
         self.ws_connection = None
         self.ws_task = None
-        
-        # Rate Limits
-        self._rate_limits_rules = {
-            "trade": {"limit": 20, "window": 2},  # 交易接口
-            "account": {"limit": 20, "window": 2},  # 账户接口
-            "market": {"limit": 20, "window": 2},  # 行情接口
-            "public": {"limit": 20, "window": 2},  # 公共接口
-        }
         
         # 事件总线（简单的回调机制）
         self.event_callbacks: Dict[EventType, List] = {
@@ -178,20 +196,30 @@ class OKXExchange(ExchangeBase):
 
         try:
             method = method.upper()
+            # 使用配置文件中的超时设置
+            timeout = aiohttp.ClientTimeout(total=self.request_timeout, connect=self.connect_timeout)
+            
             if method == "GET":
                 # GET 请求：参数通过 params 传递，拼接在 URL 后
-                async with self.session.get(url, params=params, headers=headers, timeout=10) as response:
+                async with self.session.get(url, params=params, headers=headers, timeout=timeout) as response:
                     return await self._handle_response(response)
             elif method == "POST":
                 # POST 请求：参数通过 json 传递，放在 Request Body 中
-                async with self.session.post(url, json=params, headers=headers, timeout=10) as response:
+                async with self.session.post(url, json=params, headers=headers, timeout=timeout) as response:
                     return await self._handle_response(response)
             else:
-                async with self.session.request(method, url, headers=headers, timeout=10) as response:
+                async with self.session.request(method, url, headers=headers, timeout=timeout) as response:
                     return await self._handle_response(response)
 
+        except asyncio.TimeoutError as e:
+            import traceback
+            self.logger.error(f"❌ API 请求超时 ({method} {url}): {e}")
+            self.logger.error(f"堆栈跟踪:\n{traceback.format_exc()}")
+            return None
         except Exception as e:
+            import traceback
             self.logger.error(f"❌ API 请求异常 ({method} {url}): {e}")
+            self.logger.error(f"堆栈跟踪:\n{traceback.format_exc()}")
             return None
 
     async def _handle_response(self, response) -> Optional[Dict]:

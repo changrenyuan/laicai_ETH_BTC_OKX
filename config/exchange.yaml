@@ -1,0 +1,89 @@
+# 🧱 交易所配置文件
+# API 参数 / 限流 / 超时 / WebSocket
+
+# OKX 交易所配置
+okx:
+  # API 认证配置（从 account.yaml 读取）
+  # api_key: 从 account.sub_account.api_key 读取
+  # api_secret: 从 account.sub_account.api_secret 读取
+  # api_passphrase: 从 account.sub_account.api_passphrase 读取
+  # sandbox: 从 account.sub_account.sandbox 读取
+
+  # API 基础 URL
+  base_url:
+    mainnet: "https://www.okx.com"
+    testnet: "https://www.okx.com"  # OKX 沙盒也使用主域名，通过 header 区分
+
+  # WebSocket 配置
+  websocket:
+    public_url: "wss://ws.okx.com:8443/ws/v5/public"
+    private_url: "wss://ws.okx.com:8443/ws/v5/private"
+    reconnect_interval: 5  # 重连间隔（秒）
+    max_reconnect_attempts: 10  # 最大重连次数
+
+  # API 频率限制（Rate Limiting）
+  rate_limits:
+    # 交易接口
+    trade:
+      limit: 20
+      window: 2  # 2秒内最多20次
+
+    # 账户接口
+    account:
+      limit: 20
+      window: 2
+
+    # 行情接口
+    market:
+      limit: 20
+      window: 2
+
+    # 公共接口
+    public:
+      limit: 20
+      window: 2
+
+  # 请求超时配置
+  timeouts:
+    connect: 10  # 连接超时（秒）
+    read: 30  # 读取超时（秒）
+    write: 10  # 写入超时（秒）
+
+  # 重试配置
+  retry:
+    enabled: true
+    max_retries: 3
+    retry_delay: 1  # 重试延迟（秒）
+    retry_on_status: [500, 502, 503, 504]
+
+  # 订单配置
+  order:
+    default_type: "market"  # market, limit, post_only, limit_maker
+    default_leverage: 3  # 默认杠杆倍数
+    default_margin_mode: "cross"  # cross, isolated
+
+  # 支持的交易类型
+  instruments:
+    - "SWAP"  # 永续合约
+    - "FUTURES"  # 交割合约
+    - "SPOT"  # 现货
+    - "OPTION"  # 期权
+
+  # 健康检查
+  health_check:
+    enabled: true
+    interval: 60  # 检查间隔（秒）
+    endpoint: "/api/v5/public/time"  # 健康检查端点
+
+# 通用配置
+common:
+  # 时间同步
+  time_synchronization:
+    enabled: true
+    sync_interval: 60  # 同步间隔（秒）
+    max_time_drift: 1000  # 最大时间偏差（毫秒）
+
+  # 日志配置
+  logging:
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
