@@ -23,7 +23,7 @@ import urllib.parse
 import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
-
+import os
 from exchange.base import ExchangeBase
 from core.events import Event, EventType
 from core.config_loader import get_config_loader
