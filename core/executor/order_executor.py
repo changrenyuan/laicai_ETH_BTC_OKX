@@ -6,9 +6,10 @@
 import asyncio
 import logging
 from typing import Optional, Dict
-
+# 在这两个文件的顶部添加/修改：
+from core.executor.executor_base import ExecutorBase, ExecutorType, ExecutorConfig, ExecutorStatus
 from core.executor.executor_base import ExecutorBase, ExecutorType, ExecutorConfig
-from core.events.event_base import Event, EventType
+from core.events import Event, EventType
 
 
 class OrderExecutor(ExecutorBase):
@@ -47,7 +48,7 @@ class OrderExecutor(ExecutorBase):
             
             # 发送订单创建事件
             await self._emit_event(Event(
-                type=EventType.ORDER_CREATED,
+                event_type=EventType.ORDER_CREATED,
                 data={
                     "order_id": order_id,
                     "symbol": self.config.symbol,

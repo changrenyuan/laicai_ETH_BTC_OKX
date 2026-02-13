@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Callable
 from enum import Enum
 
 from core.executor.executor_base import ExecutorBase, ExecutorStatus
-from core.events.event_base import Event, EventType
+from core.events import Event, EventType
 
 
 class OrchestratorStatus(Enum):
@@ -190,13 +190,13 @@ class ExecutorOrchestrator:
 
     async def _on_executor_event(self, event: Event):
         """处理执行器事件"""
-        self.logger.info(f"📢 执行器事件: {event.type.value} - {event.data}")
+        self.logger.info(f"📢 执行器事件: {event.event_type.value} - {event.data}")
         
         # 转发事件
         await self._emit_event(event)
         
         # 特殊事件处理
-        if event.type == EventType.EXECUTOR_FAILED:
+        if event.event_type == EventType.EXECUTOR_FAILED:
             executor_id = event.data.get("executor_id")
             self.logger.error(f"❌ 执行器失败: {executor_id}")
 

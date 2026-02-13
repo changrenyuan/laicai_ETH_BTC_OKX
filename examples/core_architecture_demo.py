@@ -5,6 +5,9 @@
 """
 
 import asyncio
+
+from datetime import datetime
+
 from core.executor.executor_base import ExecutorConfig
 from core.executor.order_executor import OrderExecutor
 from core.executor.position_executor import DCAExecutor, TWAPExecutor, GridExecutor
@@ -51,7 +54,7 @@ async def example_1_simple_order():
 
     # 添加事件监听
     def on_event(event):
-        print(f"📢 事件: {event.type.value}")
+        print(f"📢 事件: {event.event_type.value}")
         print(f"   数据: {event.data}\n")
 
     executor.add_event_listener(on_event)
@@ -110,7 +113,7 @@ async def example_2_dca_strategy():
 
     # 添加事件监听
     def on_event(event):
-        print(f"📢 事件: {event.type.value}")
+        print(f"📢 事件: {event.event_type.value}")
 
     dca_executor.add_event_listener(on_event)
 
@@ -186,7 +189,8 @@ async def example_4_trailing_stop():
         status = trailing_stop.get_status()
 
         print(f"   价格: {price:.1f}")
-        print(f"   止损位: {stop_price:.1f if stop_price else 'N/A'}")
+        stop_price_str = f"{stop_price:.1f}" if stop_price is not None else "N/A"
+        print(f"   止损位: {stop_price_str}")
         print(f"   是否触发: {is_triggered}")
         print(f"   状态: {reason}\n")
 
@@ -225,7 +229,7 @@ async def example_5_orchestrator():
 
     # 添加事件监听
     def on_event(event):
-        print(f"📢 编排器事件: {event.type.value}")
+        print(f"📢 编排器事件: {event.event_type.value}")
 
     orchestrator.add_event_listener(on_event)
 

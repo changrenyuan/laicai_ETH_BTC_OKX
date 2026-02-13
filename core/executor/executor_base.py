@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Dict, Optional, List, Callable
 
 from core.risk.triple_barrier import TripleBarrier
-from core.events.event_base import Event, EventType
+from core.events import Event, EventType
 
 
 class ExecutorStatus(Enum):
@@ -106,8 +106,8 @@ class ExecutorBase(ABC):
 
     def _generate_id(self) -> str:
         """生成执行器 ID"""
+        # return f"{self.executor_type.value}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{hash(self) & 0xFFFFFF}"
         return f"{self.executor_type.value}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{hash(self) & 0xFFFFFF}"
-
     async def start(self):
         """启动执行器"""
         if self.status == ExecutorStatus.RUNNING:
@@ -119,7 +119,7 @@ class ExecutorBase(ABC):
         
         # 发送启动事件
         await self._emit_event(Event(
-            type=EventType.EXECUTOR_START,
+            event_type=EventType.EXECUTOR_START,  # 改为 event_type
             data={
                 "executor_id": self.executor_id,
                 "symbol": self.config.symbol,
@@ -138,7 +138,7 @@ class ExecutorBase(ABC):
             self.logger.error(f"❌ 执行器执行失败: {e}")
             self.status = ExecutorStatus.FAILED
             await self._emit_event(Event(
-                type=EventType.EXECUTOR_FAILED,
+                event_type=EventType.EXECUTOR_FAILED,
                 data={
                     "executor_id": self.executor_id,
                     "error": str(e)
@@ -160,7 +160,7 @@ class ExecutorBase(ABC):
             self.logger.info(f"🛑 执行器停止: {self.executor_id} (原因: {reason})")
             
             await self._emit_event(Event(
-                type=EventType.EXECUTOR_CANCELLED,
+                event_type=EventType.EXECUTOR_CANCELLED,
                 data={
                     "executor_id": self.executor_id,
                     "reason": reason
@@ -216,7 +216,7 @@ class ExecutorBase(ABC):
         
         # 发送完成事件
         await self._emit_event(Event(
-            type=EventType.EXECUTOR_COMPLETED,
+            event_type=EventType.EXECUTOR_COMPLETED,
             data={
                 "executor_id": self.executor_id,
                 "reason": reason,

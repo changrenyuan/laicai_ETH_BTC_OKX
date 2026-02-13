@@ -8,9 +8,10 @@ import logging
 from decimal import Decimal
 from datetime import datetime
 from typing import Optional, List, Dict
-
+# 在这两个文件的顶部添加/修改：
 from core.executor.executor_base import ExecutorBase, ExecutorType, ExecutorConfig, ExecutorStatus
-from core.events.event_base import Event, EventType
+from core.executor.executor_base import ExecutorBase, ExecutorType, ExecutorConfig, ExecutorStatus
+from core.events import Event, EventType
 
 
 class DCAExecutor(ExecutorBase):

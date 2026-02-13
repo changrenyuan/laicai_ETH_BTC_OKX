@@ -360,7 +360,7 @@ status = orchestrator.get_orchestrator_status()
 **使用示例**：
 ```python
 def on_event(event):
-    print(f"Event: {event.type}, Data: {event.data}")
+    print(f"Event: {event.event_type}, Data: {event.data}")
 
 executor.add_event_listener(on_event)
 ```
