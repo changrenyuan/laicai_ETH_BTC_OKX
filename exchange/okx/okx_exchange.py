@@ -74,6 +74,23 @@ class OKXExchange(ExchangeBase):
         self.request_timeout = timeout_config.get("request", 30)
         self.connect_timeout = timeout_config.get("connect", 10)
         
+        # 代理配置（从配置读取或环境变量读取）
+        proxy_config = okx_config.get("proxy", {})
+        proxy_enabled = proxy_config.get("enabled", False)
+        
+        # 优先级：环境变量 > 配置文件
+        import os
+        self.proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+        
+        # 如果环境变量没有，则从配置文件读取
+        if not self.proxy and proxy_enabled:
+            https_proxy = proxy_config.get("https_proxy", "")
+            http_proxy = proxy_config.get("http_proxy", "")
+            self.proxy = https_proxy or http_proxy
+        
+        if self.proxy:
+            self.logger.info(f"✅ 启用代理: {self.proxy}")
+        
         # Session
         self.session: Optional[aiohttp.ClientSession] = None
         
@@ -199,16 +216,29 @@ class OKXExchange(ExchangeBase):
             # 使用配置文件中的超时设置
             timeout = aiohttp.ClientTimeout(total=self.request_timeout, connect=self.connect_timeout)
             
+            # 构建请求参数
+            request_kwargs = {
+                "url": url,
+                "timeout": timeout,
+                "headers": headers
+            }
+            
+            # 如果配置了代理，则添加代理参数
+            if self.proxy:
+                request_kwargs["proxy"] = self.proxy
+            
+            # 根据方法处理参数
             if method == "GET":
-                # GET 请求：参数通过 params 传递，拼接在 URL 后
-                async with self.session.get(url, params=params, headers=headers, timeout=timeout) as response:
+                request_kwargs["params"] = params
+                async with self.session.get(**request_kwargs) as response:
                     return await self._handle_response(response)
             elif method == "POST":
-                # POST 请求：参数通过 json 传递，放在 Request Body 中
-                async with self.session.post(url, json=params, headers=headers, timeout=timeout) as response:
+                request_kwargs["json"] = params
+                async with self.session.post(**request_kwargs) as response:
                     return await self._handle_response(response)
             else:
-                async with self.session.request(method, url, headers=headers, timeout=timeout) as response:
+                request_kwargs["data"] = params
+                async with self.session.request(method, **request_kwargs) as response:
                     return await self._handle_response(response)
 
         except asyncio.TimeoutError as e:

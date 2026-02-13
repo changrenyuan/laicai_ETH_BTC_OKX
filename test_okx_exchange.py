@@ -15,6 +15,17 @@ async def main():
     """主测试函数"""
     print("=== 测试 OKXExchange ===\n")
     
+    # 检查代理配置
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if proxy:
+        print(f"📡 使用代理: {proxy}\n")
+    else:
+        print("⚠️  未配置代理，可能无法连接 OKX API")
+        print("   如需使用代理，请设置环境变量：")
+        print("   - export HTTP_PROXY=http://127.0.0.1:7890")
+        print("   - export HTTPS_PROXY=http://127.0.0.1:7890")
+        print("   或在 config/exchange.yaml 中配置 proxy\n")
+    
     try:
         # 初始化 OKXExchange（配置将从配置文件读取）
         print("1. 初始化 OKXExchange...")

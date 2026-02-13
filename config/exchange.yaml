@@ -49,6 +49,19 @@ okx:
     read: 30  # 读取超时（秒）
     write: 10  # 写入超时（秒）
 
+  # 代理配置（可选）
+  # 支持格式：
+  # - http://host:port
+  # - https://host:port
+  # - socks5://host:port
+  # 也可以通过环境变量设置：
+  # - export HTTP_PROXY=http://127.0.0.1:7890
+  # - export HTTPS_PROXY=http://127.0.0.1:7890
+  proxy:
+    http_proxy: ""  # HTTP 代理地址（如 http://127.0.0.1:7890）
+    https_proxy: ""  # HTTPS 代理地址（如 http://127.0.0.1:7890）
+    enabled: false  # 是否启用代理（true/false）
+
   # 重试配置
   retry:
     enabled: true
