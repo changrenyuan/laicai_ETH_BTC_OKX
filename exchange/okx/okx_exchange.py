@@ -166,46 +166,32 @@ class OKXExchange(ExchangeBase):
         return base64.b64encode(mac.digest()).decode()
 
     async def _send_request(
-        self,
-        method: str,
-        url: str,
-        headers: Dict,
-        params: Optional[Dict]
+            self,
+            method: str,
+            url: str,
+            headers: Dict,
+            params: Optional[Dict]
     ) -> Optional[Dict]:
-        """发送 HTTP 请求"""
+        """发送 HTTP 请求 - 修复版"""
         if not self.session:
             await self.connect()
-        
+
         try:
-            # 从 headers 中提取是否有 POST body
-            # 注意：params 在这里可能是 POST 数据或 GET 参数
-            data = None
-            
-            # 判断是否有 POST 数据（通过 headers 或 params 判断）
-            if method.upper() == "POST" and isinstance(params, dict):
-                # POST 请求，将 params 作为 body
-                body_str = json.dumps(params)
-                async with self.session.request(
-                    method=method,
-                    url=url,
-                    params=body_str,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
+            method = method.upper()
+            if method == "GET":
+                # GET 请求：参数通过 params 传递，拼接在 URL 后
+                async with self.session.get(url, params=params, headers=headers, timeout=10) as response:
+                    return await self._handle_response(response)
+            elif method == "POST":
+                # POST 请求：参数通过 json 传递，放在 Request Body 中
+                async with self.session.post(url, json=params, headers=headers, timeout=10) as response:
                     return await self._handle_response(response)
             else:
-                # GET 请求或其他
-                async with self.session.request(
-                    method=method,
-                    url=url,
-                    params=params,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
+                async with self.session.request(method, url, headers=headers, timeout=10) as response:
                     return await self._handle_response(response)
-                
+
         except Exception as e:
-            self.logger.error(f"API 请求失败: {e}")
+            self.logger.error(f"❌ API 请求异常 ({method} {url}): {e}")
             return None
 
     async def _handle_response(self, response) -> Optional[Dict]:
