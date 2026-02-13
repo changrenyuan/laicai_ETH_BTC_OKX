@@ -25,7 +25,12 @@ class TokenBucket:
         self.last_refill_time = time.time()
 
     def acquire(self) -> bool:
-        """获取令牌"""
+        """
+        获取令牌（非阻塞）
+        
+        Returns:
+            bool: 是否成功获取令牌
+        """
         now = time.time()
         
         # 补充令牌
@@ -42,12 +47,6 @@ class TokenBucket:
             return True
         else:
             return False
-
-    def wait_for_token(self):
-        """等待令牌"""
-        while not self.acquire():
-            sleep_time = (1 - self.tokens) / self.refill_rate
-            time.sleep(sleep_time)
 
 
 class RateLimiter:

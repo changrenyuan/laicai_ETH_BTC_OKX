@@ -98,6 +98,8 @@ class DCAExecutor(ExecutorBase):
 
     async def _monitor_order(self, order_id: str):
         """监控订单"""
+        last_filled_size = 0.0  # 记录上次成交数量（避免重复累加）
+        
         while self.status == ExecutorStatus.RUNNING:
             try:
                 order_info = await self.config.exchange.get_order_status(
@@ -113,14 +115,19 @@ class DCAExecutor(ExecutorBase):
                 avg_price = float(order_info.get("avg_fill_price", 0))
                 commission = float(order_info.get("commission", 0))
                 
-                # 更新累计填充信息
-                self.filled_size += filled_size
-                self.commission += commission
+                # 计算增量（避免重复累加）
+                filled_increment = filled_size - last_filled_size
+                last_filled_size = filled_size
                 
-                # 计算加权平均价格
-                if self.filled_size > 0:
-                    total_value = self.avg_fill_price * (self.filled_size - filled_size) + avg_price * filled_size
-                    self.avg_fill_price = total_value / self.filled_size
+                # 只更新增量部分
+                if filled_increment > 0:
+                    self.filled_size += filled_increment
+                    self.commission += commission
+                    
+                    # 计算加权平均价格
+                    if self.filled_size > 0:
+                        total_value = self.avg_fill_price * (self.filled_size - filled_size) + avg_price * filled_size
+                        self.avg_fill_price = total_value / self.filled_size
                 
                 status = order_info.get("status")
                 if status == "filled":
@@ -225,6 +232,8 @@ class TWAPExecutor(ExecutorBase):
 
     async def _monitor_order(self, order_id: str):
         """监控订单（复用 DCA 的逻辑）"""
+        last_filled_size = 0.0  # 记录上次成交数量（避免重复累加）
+        
         while self.status == ExecutorStatus.RUNNING:
             try:
                 order_info = await self.config.exchange.get_order_status(
@@ -240,12 +249,19 @@ class TWAPExecutor(ExecutorBase):
                 avg_price = float(order_info.get("avg_fill_price", 0))
                 commission = float(order_info.get("commission", 0))
                 
-                self.filled_size += filled_size
-                self.commission += commission
+                # 计算增量（避免重复累加）
+                filled_increment = filled_size - last_filled_size
+                last_filled_size = filled_size
                 
-                if self.filled_size > 0:
-                    total_value = self.avg_fill_price * (self.filled_size - filled_size) + avg_price * filled_size
-                    self.avg_fill_price = total_value / self.filled_size
+                # 只更新增量部分
+                if filled_increment > 0:
+                    self.filled_size += filled_increment
+                    self.commission += commission
+                    
+                    # 计算加权平均价格
+                    if self.filled_size > 0:
+                        total_value = self.avg_fill_price * (self.filled_size - filled_size) + avg_price * filled_size
+                        self.avg_fill_price = total_value / self.filled_size
                 
                 status = order_info.get("status")
                 if status == "filled":
@@ -334,6 +350,8 @@ class GridExecutor(ExecutorBase):
 
     async def _monitor_order(self, order_id: str):
         """监控订单（复用逻辑）"""
+        last_filled_size = 0.0  # 记录上次成交数量（避免重复累加）
+        
         while self.status == ExecutorStatus.RUNNING:
             try:
                 order_info = await self.config.exchange.get_order_status(
@@ -349,12 +367,19 @@ class GridExecutor(ExecutorBase):
                 avg_price = float(order_info.get("avg_fill_price", 0))
                 commission = float(order_info.get("commission", 0))
                 
-                self.filled_size += filled_size
-                self.commission += commission
+                # 计算增量（避免重复累加）
+                filled_increment = filled_size - last_filled_size
+                last_filled_size = filled_size
                 
-                if self.filled_size > 0:
-                    total_value = self.avg_fill_price * (self.filled_size - filled_size) + avg_price * filled_size
-                    self.avg_fill_price = total_value / self.filled_size
+                # 只更新增量部分
+                if filled_increment > 0:
+                    self.filled_size += filled_increment
+                    self.commission += commission
+                    
+                    # 计算加权平均价格
+                    if self.filled_size > 0:
+                        total_value = self.avg_fill_price * (self.filled_size - filled_size) + avg_price * filled_size
+                        self.avg_fill_price = total_value / self.filled_size
                 
                 status = order_info.get("status")
                 if status == "filled":

@@ -36,7 +36,8 @@ class TripleBarrier:
         take_profit_price: Optional[float] = None,
         stop_loss_price: Optional[float] = None,
         time_limit_seconds: Optional[int] = None,
-        trailing_stop_config: Optional[dict] = None
+        trailing_stop_config: Optional[dict] = None,
+        side: Literal["long", "short"] = "long"
     ):
         """
         Args:
@@ -48,10 +49,12 @@ class TripleBarrier:
                     "activation_distance": 0.02,  # 激活距离（百分比）
                     "trailing_distance": 0.01     # 跟踪距离（百分比）
                 }
+            side: 仓位方向（long/short）
         """
         self.take_profit_price = take_profit_price
         self.stop_loss_price = stop_loss_price
         self.time_limit_seconds = time_limit_seconds
+        self.side = side
         
         # 移动止损
         self.trailing_stop_config = trailing_stop_config or {}
@@ -121,8 +124,18 @@ class TripleBarrier:
         if self.take_profit_price is None:
             return False
         
-        if current_price >= self.take_profit_price:
-            self.logger.info(f"✅ 触发止盈: {current_price} >= {self.take_profit_price}")
+        # 根据方向判断止盈条件
+        if self.side == "long":
+            # 做多：价格上涨触发止盈
+            triggered = current_price >= self.take_profit_price
+            comparison = ">="
+        else:
+            # 做空：价格下跌触发止盈
+            triggered = current_price <= self.take_profit_price
+            comparison = "<="
+        
+        if triggered:
+            self.logger.info(f"✅ 触发止盈 ({self.side}): {current_price} {comparison} {self.take_profit_price}")
             return True
         
         return False
@@ -134,8 +147,18 @@ class TripleBarrier:
         
         stop_price = self.dynamic_stop_price if self.is_trailing_stop_activated else self.stop_loss_price
         
-        if current_price <= stop_price:
-            self.logger.warning(f"⛔ 触发止损: {current_price} <= {stop_price}")
+        # 根据方向判断止损条件
+        if self.side == "long":
+            # 做多：价格下跌触发止损
+            triggered = current_price <= stop_price
+            comparison = "<="
+        else:
+            # 做空：价格上涨触发止损
+            triggered = current_price >= stop_price
+            comparison = ">="
+        
+        if triggered:
+            self.logger.warning(f"⛔ 触发止损 ({self.side}): {current_price} {comparison} {stop_price}")
             return True
         
         return False
@@ -159,8 +182,9 @@ class TripleBarrier:
         
         移动止损逻辑：
         1. 价格达到激活距离后，激活移动止损
-        2. 价格上升时，动态提高止损位
-        3. 价格下跌时，保持在跟踪距离内
+        2. 根据方向动态调整止损位
+           - Long：价格上涨时，止损位上移
+           - Short：价格下跌时，止损位下移
         """
         if not self.trailing_stop_config:
             return BarrierAction.NONE
@@ -179,15 +203,28 @@ class TripleBarrier:
             self.peak_price = max(self.peak_price, current_price)
             self.trough_price = min(self.trough_price, current_price)
         
-        # 计算价格变化
-        price_change = (current_price - self.stop_loss_price) / self.stop_loss_price
+        # 计算价格变化（根据方向）
+        if self.side == "long":
+            # 做多：价格相对于止损位的上涨幅度
+            price_change = (current_price - self.stop_loss_price) / self.stop_loss_price
+        else:
+            # 做空：止损位相对于价格的下跌幅度
+            price_change = (self.stop_loss_price - current_price) / self.stop_loss_price
         
         # 激活移动止损
         if not self.is_trailing_stop_activated and price_change >= activation_distance:
             self.is_trailing_stop_activated = True
-            self.dynamic_stop_price = current_price * (1 - trailing_distance)
+            
+            # 根据方向设置动态止损位
+            if self.side == "long":
+                # 做多：止损位在当前价格下方
+                self.dynamic_stop_price = current_price * (1 - trailing_distance)
+            else:
+                # 做空：止损位在当前价格上方
+                self.dynamic_stop_price = current_price * (1 + trailing_distance)
+            
             self.logger.info(
-                f"🔥 移动止损激活: "
+                f"🔥 移动止损激活 ({self.side}): "
                 f"价格变化 {price_change:.2%} >= {activation_distance:.2%}, "
                 f"动态止损 {self.dynamic_stop_price}"
             )
@@ -195,23 +232,42 @@ class TripleBarrier:
         
         # 执行移动止损
         if self.is_trailing_stop_activated:
-            # 价格上升，动态提高止损位
-            if current_price > self.peak_price:
-                self.peak_price = current_price
-                new_stop = current_price * (1 - trailing_distance)
-                if new_stop > self.dynamic_stop_price:
-                    self.dynamic_stop_price = new_stop
-                    self.logger.debug(
-                        f"📈 移动止损上移: {self.dynamic_stop_price} "
-                        f"(峰值: {self.peak_price})"
+            if self.side == "long":
+                # 做多：价格上涨，动态提高止损位
+                if current_price > self.peak_price:
+                    self.peak_price = current_price
+                    new_stop = current_price * (1 - trailing_distance)
+                    if new_stop > self.dynamic_stop_price:
+                        self.dynamic_stop_price = new_stop
+                        self.logger.debug(
+                            f"📈 移动止损上移: {self.dynamic_stop_price} "
+                            f"(峰值: {self.peak_price})"
+                        )
+                
+                # 价格下跌，检查是否触发
+                if current_price <= self.dynamic_stop_price:
+                    self.logger.warning(
+                        f"⛔ 触发移动止损 ({self.side}): {current_price} <= {self.dynamic_stop_price}"
                     )
-            
-            # 价格下跌，检查是否触发
-            if current_price <= self.dynamic_stop_price:
-                self.logger.warning(
-                    f"⛔ 触发移动止损: {current_price} <= {self.dynamic_stop_price}"
-                )
-                return BarrierAction.TRAILING_STOP
+                    return BarrierAction.TRAILING_STOP
+            else:
+                # 做空：价格下跌，动态降低止损位
+                if current_price < self.trough_price:
+                    self.trough_price = current_price
+                    new_stop = current_price * (1 + trailing_distance)
+                    if new_stop < self.dynamic_stop_price:
+                        self.dynamic_stop_price = new_stop
+                        self.logger.debug(
+                            f"📉 移动止损下移: {self.dynamic_stop_price} "
+                            f"(谷值: {self.trough_price})"
+                        )
+                
+                # 价格上涨，检查是否触发
+                if current_price >= self.dynamic_stop_price:
+                    self.logger.warning(
+                        f"⛔ 触发移动止损 ({self.side}): {current_price} >= {self.dynamic_stop_price}"
+                    )
+                    return BarrierAction.TRAILING_STOP
         
         return BarrierAction.NONE
 

@@ -86,7 +86,8 @@ class ExecutorBase(ABC):
         self.triple_barrier = TripleBarrier(
             take_profit_price=config.take_profit_price,
             stop_loss_price=config.stop_price,
-            time_limit_seconds=config.time_limit
+            time_limit_seconds=config.time_limit,
+            side=config.side
         )
         
         # 追踪价格
@@ -105,7 +106,7 @@ class ExecutorBase(ABC):
 
     def _generate_id(self) -> str:
         """生成执行器 ID"""
-        return f"{self.executor_type.value}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{hash(self)} & 0xFFFFFF}"
+        return f"{self.executor_type.value}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{hash(self) & 0xFFFFFF}"
 
     async def start(self):
         """启动执行器"""
